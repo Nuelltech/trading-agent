@@ -43,6 +43,36 @@ RADAR_EUROPA = [
 ]
 
 # 5. FUNÇÕES AUXILIARES (INTELIGÊNCIA)
+@app.get("/analise/{simbolo}")
+def analise_detalhada(simbolo: str):
+    try:
+        t = yf.Ticker(simbolo)
+        hist = t.history(period="14d") # Precisamos de 14 dias para o RSI
+        
+        # Cálculo Simples de RSI
+        delta = hist['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        rsi_val = round(rsi.iloc[-1], 2)
+        
+        # Lógica de Recomendação
+        if rsi_val < 35:
+            rec = "🔥 SOBREVENDIDO (Comprar)"
+        elif rsi_val > 65:
+            rec = "⚠️ SOBRECOMPRADO (Vender/Aguardar)"
+        else:
+            rec = "Neutral"
+            
+        return {
+            "rsi": rsi_val,
+            "recomendacao": rec,
+            "suporte": round(hist['Low'].min(), 2)
+        }
+    except:
+        return {"rsi": "N/A", "recomendacao": "Erro na análise", "suporte": 0}
+        
 def buscar_noticias_e_classificar(simbolo):
     try:
         url = f"https://news.google.com/rss/search?q={simbolo}+stock+market+analysis+when:7d&hl=en-US&gl=US&ceid=US:en"
