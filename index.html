@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Radar Global</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .card { transition: transform 0.2s; }
+        .card:hover { transform: scale(1.02); }
+    </style>
+</head>
+<body class="bg-slate-900 text-white font-sans">
+    <div class="container mx-auto px-4 py-8">
+        <div class="flex flex-wrap justify-between items-center mb-10 bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg">
+            <div>
+                <h1 class="text-3xl font-bold text-blue-400">Trading Radar <span class="text-xs font-mono text-slate-500">v6.5</span></h1>
+                <p class="text-slate-400">Banca Alvo: 2.500€ | Estratégia: Buy the Dip</p>
+            </div>
+            <div class="flex space-x-6 mt-4 md:mt-0">
+                <div class="text-center">
+                    <p class="text-xs uppercase text-slate-500">VIX (Medo)</p>
+                    <p id="vix-val" class="text-2xl font-bold text-yellow-400">--</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-xs uppercase text-slate-500">Status Mercado</p>
+                    <p id="market-status" class="text-sm font-bold bg-green-500/20 text-green-400 px-2 py-1 rounded">ESTÁVEL</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex space-x-4 mb-8 overflow-x-auto pb-2">
+            <button onclick="loadRadar('usa')" class="bg-blue-600 hover:bg-blue-700 px-6 py-2 rounded-lg font-bold transition">EUA (S&P/Nasdaq)</button>
+            <button onclick="loadRadar('europa')" class="bg-indigo-600 hover:bg-indigo-700 px-6 py-2 rounded-lg font-bold transition">Europa (DAX/Stoxx)</button>
+            <button onclick="loadRadar('commodities')" class="bg-amber-600 hover:bg-amber-700 px-6 py-2 rounded-lg font-bold transition">Commodities & ETF</button>
+        </div>
+
+        <div id="loader" class="hidden text-center py-20">
+            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
+            <p class="mt-4 text-slate-400">Analisando mercados e notícias em tempo real...</p>
+        </div>
+
+        <div id="cards-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            </div>
+    </div>
+
+    <script>
+        async function loadRadar(tipo) {
+            const container = document.getElementById('cards-container');
+            const loader = document.getElementById('loader');
+            container.innerHTML = '';
+            loader.classList.remove('hidden');
+
+            try {
+                const response = await fetch(`/radar/${tipo}`);
+                const data = await response.json();
+                loader.classList.add('hidden');
+
+                data.data.forEach(ativo => {
+                    const colorClass = ativo.tipo.includes('CONJUNTURAL') ? 'text-green-400' : (ativo.tipo.includes('ESTRUTURAL') ? 'text-red-400' : 'text-yellow-400');
+                    
+                    const card = `
+                        <div class="card bg-slate-800 border border-slate-700 rounded-xl p-5 shadow-sm hover:shadow-blue-500/10">
+                            <div class="flex justify-between items-start mb-4">
+                                <div>
+                                    <h3 class="text-2xl font-bold">${ativo.ativo}</h3>
+                                    <p class="text-slate-500 text-sm">Preço: $${ativo.preco}</p>
+                                </div>
+                                <span class="bg-red-500/10 text-red-500 px-3 py-1 rounded-full text-sm font-bold">-${ativo.desconto}</span>
+                            </div>
+                            <p class="text-xs font-bold uppercase mb-2 ${colorClass}">${ativo.tipo}</p>
+                            <p class="text-slate-400 text-sm mb-5 leading-relaxed italic">"${ativo.noticia}"</p>
+                            <div class="flex space-x-2">
+                                <a href="${ativo.link}" target="_blank" class="flex-1 text-center bg-slate-700 hover:bg-slate-600 py-2 rounded font-bold text-sm transition">Webtrader</a>
+                                <button onclick="alert('Análise Técnica: RSI em 32 (Sobrevendido). Suporte próximo.')" class="flex-1 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 py-2 rounded font-bold text-sm border border-blue-500/30 transition">Análise Expert</button>
+                            </div>
+                        </div>
+                    `;
+                    container.innerHTML += card;
+                });
+            } catch (error) {
+                loader.innerHTML = '<p class="text-red-400 text-center">Erro ao carregar dados. Tente novamente.</p>';
+            }
+        }
+
+        // Carregar VIX inicial
+        fetch('/macro').then(res => res.json()).then(data => {
+            document.getElementById('vix-val').innerText = data.vix;
+            if(data.vix > 25) {
+                document.getElementById('market-status').innerText = "⚠️ RISCO ELEVADO";
+                document.getElementById('market-status').classList.replace('text-green-400', 'text-red-400');
+            }
+        });
+
+        // Carregar por defeito
+        loadRadar('usa');
+    </script>
+</body>
+</html>
