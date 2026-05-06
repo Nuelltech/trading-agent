@@ -1,38 +1,30 @@
-from fastapi import FastAPI
-import yfinance as yf
-import pandas as pd
-import requests
-import xml.etree.ElementTree as ET
-from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 import yfinance as yf
-# ... outros imports ...
+import requests
+import xml.etree.ElementTree as ET
+from datetime import datetime
 
-templates = Jinja2Templates(directory="templates")
-
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    # Aqui vamos buscar o VIX e o DIX (simulado ou via API)
-    vix = yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]
-    
-    # Estado do Mercado
-    status_mercado = "🔥 RISCO ALTO" if vix > 25 else "✅ ESTÁVEL"
-    
-    return templates.TemplateResponse("index.html", {
-        "request": request, 
-        "vix": round(vix, 2),
-        "status": status_mercado
-    })
-
-# Mantemos os teus /radar/usa, /radar/europa etc como fontes de dados (API)
+# 1. INICIALIZAÇÃO
 app = FastAPI(title="Agente Trading V6 - Full Intelligence")
 
-# --- LISTAS REPOSTAS E AMPLIADAS ---
+# 2. CONFIGURAÇÃO DE SEGURANÇA (CORS)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+# 3. CONFIGURAÇÃO DE TEMPLATES
+templates = Jinja2Templates(directory="templates")
+
+# 4. LISTAS DE ATIVOS
 RADAR_USA = [
-    "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA", "NFLX", "CRM", "UBER", 
+    "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA", "NFLX", "CRM", "UBer", 
     "ADBE", "ORCL", "PLTR", "AMD", "INTC", "PYPL", "DIS", "NKE", "SBUX", "F", 
     "GM", "WMT", "T", "VZ", "BAC", "JPM", "GS", "MS", "PFE", "JNJ", "ABT", 
     "MRK", "UNH", "RTX", "BA", "CAT", "DE", "HON", "IBM", "CSCO", "QCOM", 
@@ -50,8 +42,7 @@ RADAR_EUROPA = [
     "STLAM.MI", "RACE", "KER.PA", "ITX.MC", "IBE.MC", "DB1.DE", "CBK.DE"
 ]
 
-# --- MOTOR DE INTELIGÊNCIA ---
-
+# 5. FUNÇÕES AUXILIARES (INTELIGÊNCIA)
 def buscar_noticias_e_classificar(simbolo):
     try:
         url = f"https://news.google.com/rss/search?q={simbolo}+stock+market+analysis+when:7d&hl=en-US&gl=US&ceid=US:en"
@@ -60,7 +51,6 @@ def buscar_noticias_e_classificar(simbolo):
         noticias = [item.find('title').text for item in root.findall('.//item')[:2]]
         texto = " ".join(noticias).lower()
         
-        # Lógica de Classificação
         if any(w in texto for w in ["fed", "rates", "inflation", "market", "sector", "dollar", "economy"]):
             tipo = "✅ CONJUNTURAL (Oportunidade)"
         elif any(w in texto for w in ["lawsuit", "investigation", "fraud", "miss", "negative", "cuts"]):
@@ -84,7 +74,6 @@ def processar_radar(lista):
             max_p = hist['High'].max()
             desc = ((max_p - p_atual) / max_p) * 100
             
-            # Filtro: Apenas ativos em "Saldos" (>10%)
             if desc > 10:
                 tipo, news = buscar_noticias_e_classificar(simbolo)
                 oportunidades.append({
@@ -98,7 +87,27 @@ def processar_radar(lista):
         except: continue
     return sorted(oportunidades, key=lambda x: float(x['desconto'].replace('%','')), reverse=True)
 
-# --- ENDPOINTS ---
+# 6. ENDPOINTS (ROTAS)
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    try:
+        vix = yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]
+    except:
+        vix = 0
+    status_mercado = "🔥 RISCO ALTO" if vix > 25 else "✅ ESTÁVEL"
+    return templates.TemplateResponse("index.html", {
+        "request": request, 
+        "vix": round(vix, 2),
+        "status": status_mercado
+    })
+
+@app.get("/macro")
+def get_macro():
+    try:
+        vix = yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]
+    except:
+        vix = 0
+    return {"vix": round(vix, 2), "status": "Estável"}
 
 @app.get("/radar/usa")
 def get_usa():
@@ -111,7 +120,3 @@ def get_commodities():
 @app.get("/radar/europa")
 def get_europa():
     return {"radar": "Europa Full Intel", "data": processar_radar(RADAR_EUROPA)}
-
-@app.get("/")
-def home():
-    return {"status": "Online", "v": "6.0", "endpoints": ["/radar/usa", "/radar/europa", "/radar/commodities"]}
