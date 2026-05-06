@@ -5,85 +5,88 @@ import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
-app = FastAPI(title="Agente Trading V5 - Focado e Estável")
+app = FastAPI(title="Agente Trading Multi-Radar")
 
-# LISTA CURADA (Hardcoded) - Focada em Liquidez e Acessibilidade
-# Removi ativos acima de 500$ e deixei os mais interessantes da tua lista
-MINHA_LISTA = [
-    "NVDA", "AAPL", "TSLA", "WMT", "XOM", "V", "INTC", "JNJ", "BAC", "NFLX",
-    "DIS", "PYPL", "F", "PFE", "UBER", "STLA", "NKE", "GOLD", "AMD", "GOOGL",
-    "AMZN", "META", "MU", "ORCL", "CSCO", "KO", "HD", "PLTR", "MRK", "PM",
-    "WFC", "RTX", "C", "PEP", "IBM", "QCOM", "MCD", "NEE", "VZ", "BA",
-    "T", "TJX", "GILD", "WDC", "SCHW", "DELL", "BX", "ABT", "PANW", "CRM",
-    "COP", "HON", "SBUX", "NEM", "MO", "CVS", "ACN", "MDT", "CMCSA", "USB"
+# --- LISTAS DE ALTO VOLUME ---
+
+RADAR_USA = [
+    "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA", "BRK-B", "UNH", "JPM",
+    "JNJ", "V", "PG", "MA", "HD", "CVX", "ABBV", "LLY", "AVGO", "PFE", "XOM",
+    "BAC", "KO", "PEP", "TMO", "COST", "ADBE", "WMT", "DIS", "CSCO", "ACN",
+    "ABT", "VZ", "CRM", "DHR", "NFLX", "LIN", "TXN", "PM", "UPS", "NEE",
+    "AMGN", "HON", "LOW", "RTX", "ORCL", "IBM", "INTC", "CAT", "QCOM"
 ]
 
-def buscar_noticias_recentes(simbolo):
-    try:
-        url = f"https://news.google.com/rss/search?q={simbolo}+stock+when:7d&hl=en-US&gl=US&ceid=US:en"
-        response = requests.get(url, timeout=5)
-        root = ET.fromstring(response.content)
-        return [item.find('title').text for item in root.findall('.//item')[:3]]
-    except:
-        return ["Sem notícias recentes."]
+RADAR_EUROPA = [
+    "ASML", "MC.PA", "OR.PA", "SAP", "SIE.DE", "TTE", "SAN.MC", "ADS.DE", "ALV.DE",
+    "AIR.PA", "BMW.DE", "VOW3.DE", "MBG.DE", "BAYN.DE", "BAS.DE", "DTE.DE", "BNP.PA",
+    "INGA.AMS", "ISP.MI", "ENI.MI", "RACE", "STLAM.MI", "BBVA.MC", "ITX.MC", "IBE.MC",
+    "RMS.PA", "KER.PA", "DAI.DE", "CBK.DE", "RWE.DE", "DPW.DE", "MUV2.DE"
+]
 
-@app.get("/")
-def home():
-    return {"status": "Online", "modo": "Cão de Guarda (Lista Privada)"}
+RADAR_COMMODITIES_ETFS = [
+    "GC=F", "SI=F", "CL=F", "BZ=F", "NG=F", "HG=F", "KC=F", "CC=F", "CT=F", # Commo
+    "SPY", "QQQ", "IWM", "EEM", "GDX", "XLF", "XLE", "XLI", "XLK", "XLV", "XLP" # ETFs
+]
 
-@app.get("/radar")
-def get_radar():
+RADAR_ASIA_EMERGENTES = [
+    "BABA", "JD", "NIO", "TSM", "SONY", "VALE", "PBR", "BIDU", "PDD", "TCEHY",
+    "HMC", "TM", "INFY", "SE", "MELI", "CPNG", "BUD", "BTI"
+]
+
+# --- LÓGICA DE PROCESSAMENTO ---
+
+def analisar_lista(lista, nome_radar):
     oportunidades = []
-    start_time = datetime.now()
-    
-    for simbolo in MINHA_LISTA:
+    for simbolo in lista:
         try:
             ticker = yf.Ticker(simbolo)
-            # 6 meses é o ideal para ver o "desconto" em relação ao topo recente
             hist = ticker.history(period="6mo")
             if hist.empty: continue
             
             preco_atual = hist['Close'].iloc[-1]
-            
-            # Filtro de Preço (Acessibilidade para 2.500€)
-            if preco_atual > 300: continue
+            # Filtro: Ações > 450€ fora, commodities/ETFs sempre dentro
+            if preco_atual > 450 and not any(x in simbolo for x in ["=F", "SPY", "QQQ"]):
+                continue
             
             max_p = hist['High'].max()
             desc = ((max_p - preco_atual) / max_p) * 100
             
-            # Filtro de Desconto (Só interessa se caiu mais de 10% para ser "saldo")
-            if desc > 10:
-                headlines = buscar_noticias_recentes(simbolo)
-                analise_texto = " ".join(headlines).lower()
-                
-                # Inteligência de Classificação
-                if any(w in analise_texto for w in ["lawsuit", "investigation", "fraud", "miss", "negative"]):
-                    tipo = "⚠️ ESTRUTURAL (Risco)"
-                elif any(w in analise_texto for w in ["fed", "inflation", "market", "sector", "rates", "economy"]):
-                    tipo = "✅ CONJUNTURAL (Oportunidade)"
-                else:
-                    tipo = "🟡 ANALISAR"
-
+            # Filtro de Desconto: 10% para ações, 7% para ETFs/Commodities
+            limiar = 7 if any(x in simbolo for x in ["=F", "SPY", "QQQ"]) else 10
+            
+            if desc > limiar:
                 oportunidades.append({
                     "ativo": simbolo,
                     "preco": round(preco_atual, 2),
                     "desconto": f"{round(desc, 1)}%",
-                    "tipo": tipo,
-                    "justificacao_real": headlines[0] if headlines else "Verificar notícias",
-                    "link_fortrade": f"https://webtrader.fortrade.com/"
+                    "link": f"https://webtrader.fortrade.com/"
                 })
-        except:
-            continue
+        except: continue
+    
+    return sorted(oportunidades, key=lambda x: float(x['desconto'].replace('%','')), reverse=True)
 
-    # Ordenar pelos melhores descontos
-    top_radar = sorted(oportunidades, key=lambda x: float(x['desconto'].replace('%','')), reverse=True)
+# --- ENDPOINTS (Onde vais clicar) ---
 
+@app.get("/radar/usa")
+def get_usa():
+    return {"radar": "EUA (S&P 500 / NASDAQ)", "data": analisar_lista(RADAR_USA, "USA")}
+
+@app.get("/radar/europa")
+def get_europa():
+    return {"radar": "EUROPA (Stoxx / DAX)", "data": analisar_lista(RADAR_EUROPA, "EUROPA")}
+
+@app.get("/radar/commodities")
+def get_commodities():
+    return {"radar": "COMMODITIES & ETFs", "data": analisar_lista(RADAR_COMMODITIES_ETFS, "COMMODITIES")}
+
+@app.get("/radar/asia")
+def get_asia():
+    return {"radar": "ÁSIA & EMERGENTES", "data": analisar_lista(RADAR_ASIA_EMERGENTES, "ASIA")}
+
+@app.get("/")
+def home():
     return {
-        "metadados": {
-            "data": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "ativos_vigiados": len(MINHA_LISTA),
-            "oportunidades_no_radar": len(top_radar),
-            "tempo_execucao": f"{(datetime.now() - start_time).seconds}s"
-        },
-        "sugestoes": top_radar
+        "msg": "Agente Multi-Radar Ativo",
+        "links": ["/radar/usa", "/radar/europa", "/radar/commodities", "/radar/asia"]
     }
