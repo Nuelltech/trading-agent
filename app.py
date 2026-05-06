@@ -4,7 +4,29 @@ import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+import yfinance as yf
+# ... outros imports ...
 
+templates = Jinja2Templates(directory="templates")
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    # Aqui vamos buscar o VIX e o DIX (simulado ou via API)
+    vix = yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]
+    
+    # Estado do Mercado
+    status_mercado = "🔥 RISCO ALTO" if vix > 25 else "✅ ESTÁVEL"
+    
+    return templates.TemplateResponse("index.html", {
+        "request": request, 
+        "vix": round(vix, 2),
+        "status": status_mercado
+    })
+
+# Mantemos os teus /radar/usa, /radar/europa etc como fontes de dados (API)
 app = FastAPI(title="Agente Trading V6 - Full Intelligence")
 
 # --- LISTAS REPOSTAS E AMPLIADAS ---
