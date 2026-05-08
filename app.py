@@ -24,7 +24,7 @@ templates = Jinja2Templates(directory="templates")
 
 # 4. LISTAS DE ATIVOS
 RADAR_USA = [
-    "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA", "NFLX", "CRM", "UBer", 
+    "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA", "NFLX", "CRM", "UBER", 
     "ADBE", "ORCL", "PLTR", "AMD", "INTC", "PYPL", "DIS", "NKE", "SBUX", "F", 
     "GM", "WMT", "T", "VZ", "BAC", "JPM", "GS", "MS", "PFE", "JNJ", "ABT", 
     "MRK", "UNH", "RTX", "BA", "CAT", "DE", "HON", "IBM", "CSCO", "QCOM", 
@@ -42,57 +42,66 @@ RADAR_EUROPA = [
     "STLAM.MI", "RACE", "KER.PA", "ITX.MC", "IBE.MC", "DB1.DE", "CBK.DE"
 ]
 
-# 5. FUNÇÕES AUXILIARES (INTELIGÊNCIA)
+# 5. FUNÇÕES DE INTELIGÊNCIA E ESTRATÉGIA
 
 @app.get("/estrategia/{simbolo}")
 def gerar_estrategia(simbolo: str):
     try:
         t = yf.Ticker(simbolo)
-        # Pegamos 2 anos para contexto macro e 60 dias para micro
         hist_longo = t.history(period="2y")
         hist_curto = t.history(period="60d")
         
+        if hist_curto.empty:
+            return {"erro": "Dados insuficientes"}
+
         p_atual = hist_curto['Close'].iloc[-1]
         
-        # --- INTELIGÊNCIA TÉCNICA PRO ---
+        # --- ANÁLISE TÉCNICA AVANÇADA ---
         ema_20 = hist_curto['Close'].ewm(span=20).mean().iloc[-1]
         ema_50 = hist_curto['Close'].ewm(span=50).mean().iloc[-1]
         volatilidade = hist_curto['Close'].pct_change().std() * 100
         
-        # Tendência de Médio Prazo
+        # --- LÓGICA DE PULLBACK E REFORÇO ---
+        suporte_10d = hist_curto['Low'].tail(10).min()
+        suporte_critico = hist_curto['Low'].min()
+        resistencia_topo = hist_longo['High'].tail(250).max()
+        
+        # Zona de Pullback (Entrada Defensiva)
+        zona_pullback = round(suporte_10d * 1.005, 2)
+        
+        # Mensagem de Pullback
+        if p_atual > suporte_10d * 1.03:
+            pullback_msg = f"⚠️ Preço esticado. Aguardar recuo aos {zona_pullback}€."
+        else:
+            pullback_msg = "✅ Ponto de entrada atual defensável (próximo ao suporte)."
+
+        # Reforços
+        reforco_queda = round(suporte_critico * 1.005, 2)
+        rompimento_alta = round(hist_curto['High'].tail(20).max(), 2)
+
+        # --- GESTÃO DE RISCO (Banca 2500€ | 1% Risco = 25€) ---
+        stop_loss = round(p_atual - (p_atual * (volatilidade/100) * 2.5), 2)
+        tp1 = round(p_atual + (p_atual - stop_loss) * 2, 2)
+        
+        # --- INSIGHTS ---
+        tipo, noticia = buscar_noticias_e_classificar(simbolo)
         tendencia = "BULLISH 🚀" if p_atual > ema_50 else "BEARISH 📉"
         fase = "Acumulação" if abs(p_atual - ema_20)/p_atual < 0.02 else "Expansão"
-        
-        # Suportes e Resistências "Psicológicas"
-        suporte_critico = round(hist_curto['Low'].min(), 2)
-        resistencia_topo = round(hist_longo['High'].tail(250).max(), 2)
-
-        # --- GESTÃO DE RISCO PROFISSIONAL ---
-        # Stop Loss baseado na volatilidade (ATR simplificado)
-        stop_loss = round(p_atual - (p_atual * (volatilidade/100) * 2), 2)
-        target_1 = round(p_atual + (p_atual - stop_loss) * 2, 2) # Rácio 2:1
-        
-        # --- NARRATIVA DO MERCADO ---
-        tipo, noticia = buscar_noticias_e_classificar(simbolo)
-        
-        # Lógica de Analista: O que o mercado ignora?
-        if p_atual < ema_50 and "beat" in noticia.lower():
-            insight = "O mercado está a castigar o ativo apesar dos fundamentais sólidos. Divergência Bullish detectada."
-        elif p_atual > resistencia_topo * 0.95:
-            insight = "Atenção ao FOMO. Ativo próximo de máxima histórica com exaustão de volume."
-        else:
-            insight = "Consolidação lateral. O mercado aguarda um catalisador macro para romper a média de 50 dias."
 
         return {
             "ativo": simbolo.upper(),
             "preco": round(p_atual, 2),
             "tendencia": tendencia,
             "fase": fase,
+            "zona_pullback": zona_pullback,
+            "pullback_msg": pullback_msg,
+            "reforco_queda": reforco_queda,
+            "rompimento_alta": rompimento_alta,
             "stop": stop_loss,
-            "tp1": target_1,
-            "tp_final": resistencia_topo,
+            "tp1": tp1,
+            "tp_final": round(resistencia_topo, 2),
             "lotes": round(25 / (p_atual - stop_loss), 2) if p_atual > stop_loss else 0,
-            "insight": insight,
+            "insight": f"Mercado em {fase}. O preço ignora a média de 50 dias enquanto noticias indicam cenário {tipo.split()[1]}.",
             "noticia": noticia,
             "risco": "MÉDIO" if volatilidade < 2.5 else "ALTO 🔥"
         }
@@ -100,13 +109,10 @@ def gerar_estrategia(simbolo: str):
         return {"erro": str(e)}
 
 @app.get("/analise/{simbolo}")
-        
 def analise_detalhada(simbolo: str):
     try:
         t = yf.Ticker(simbolo)
-        hist = t.history(period="14d") # Precisamos de 14 dias para o RSI
-        
-        # Cálculo Simples de RSI
+        hist = t.history(period="30d")
         delta = hist['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -114,13 +120,9 @@ def analise_detalhada(simbolo: str):
         rsi = 100 - (100 / (1 + rs))
         rsi_val = round(rsi.iloc[-1], 2)
         
-        # Lógica de Recomendação
-        if rsi_val < 35:
-            rec = "🔥 SOBREVENDIDO (Comprar)"
-        elif rsi_val > 65:
-            rec = "⚠️ SOBRECOMPRADO (Vender/Aguardar)"
-        else:
-            rec = "Neutral"
+        rec = "Neutral"
+        if rsi_val < 35: rec = "🔥 SOBREVENDIDO (Comprar)"
+        elif rsi_val > 65: rec = "⚠️ SOBRECOMPRADO (Aguardar)"
             
         return {
             "rsi": rsi_val,
@@ -128,8 +130,8 @@ def analise_detalhada(simbolo: str):
             "suporte": round(hist['Low'].min(), 2)
         }
     except:
-        return {"rsi": "N/A", "recomendacao": "Erro na análise", "suporte": 0}
-        
+        return {"rsi": "N/A", "recomendacao": "Erro", "suporte": 0}
+
 def buscar_noticias_e_classificar(simbolo):
     try:
         url = f"https://news.google.com/rss/search?q={simbolo}+stock+market+analysis+when:7d&hl=en-US&gl=US&ceid=US:en"
@@ -144,10 +146,9 @@ def buscar_noticias_e_classificar(simbolo):
             tipo = "⚠️ ESTRUTURAL (Risco)"
         else:
             tipo = "🟡 ANALISAR"
-            
         return tipo, noticias[0] if noticias else "Sem notícias recentes."
     except:
-        return "🟡 ANALISAR", "Erro ao carregar notícias."
+        return "🟡 ANALISAR", "Erro de conexão."
 
 def processar_radar(lista):
     oportunidades = []
@@ -156,7 +157,6 @@ def processar_radar(lista):
             t = yf.Ticker(simbolo)
             hist = t.history(period="6mo")
             if hist.empty: continue
-            
             p_atual = hist['Close'].iloc[-1]
             max_p = hist['High'].max()
             desc = ((max_p - p_atual) / max_p) * 100
@@ -174,19 +174,13 @@ def processar_radar(lista):
         except: continue
     return sorted(oportunidades, key=lambda x: float(x['desconto'].replace('%','')), reverse=True)
 
-# 6. ENDPOINTS (ROTAS)
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 async def dashboard(request: Request):
     try:
         vix = yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]
     except:
         vix = 0
-    status_mercado = "🔥 RISCO ALTO" if vix > 25 else "✅ ESTÁVEL"
-    return templates.TemplateResponse("index.html", {
-        "request": request, 
-        "vix": round(vix, 2),
-        "status": status_mercado
-    })
+    return templates.TemplateResponse("index.html", {"request": request, "vix": round(vix, 2)})
 
 @app.get("/macro")
 def get_macro():
@@ -194,16 +188,13 @@ def get_macro():
         vix = yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]
     except:
         vix = 0
-    return {"vix": round(vix, 2), "status": "Estável"}
+    return {"vix": round(vix, 2)}
 
 @app.get("/radar/usa")
-def get_usa():
-    return {"radar": "EUA Full Intel", "data": processar_radar(RADAR_USA)}
+def get_usa(): return {"data": processar_radar(RADAR_USA)}
 
 @app.get("/radar/commodities")
-def get_commodities():
-    return {"radar": "Commo & ETF Full Intel", "data": processar_radar(RADAR_COMMODITIES)}
+def get_commodities(): return {"data": processar_radar(RADAR_COMMODITIES)}
 
 @app.get("/radar/europa")
-def get_europa():
-    return {"radar": "Europa Full Intel", "data": processar_radar(RADAR_EUROPA)}
+def get_europa(): return {"data": processar_radar(RADAR_EUROPA)}
