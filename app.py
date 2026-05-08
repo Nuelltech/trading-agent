@@ -44,6 +44,44 @@ RADAR_EUROPA = [
 
 # 5. FUNÇÕES AUXILIARES (INTELIGÊNCIA)
 @app.get("/analise/{simbolo}")
+
+@app.get("/estrategia/{simbolo}")
+def gerar_estrategia(simbolo: str):
+    try:
+        t = yf.Ticker(simbolo)
+        hist = t.history(period="1y") # Olhamos para 1 ano para ver o "quadro geral"
+        p_atual = hist['Close'].iloc[-1]
+        
+        # Análise Técnica para Estratégia
+        suporte = round(hist['Low'].tail(30).min(), 2) # Mínimo dos últimos 30 dias
+        resistencia = round(hist['High'].tail(30).max(), 2) # Máximo dos últimos 30 dias
+        media_200 = round(hist['Close'].mean(), 2)
+        
+        # O que o mercado ignora?
+        tipo, noticia = buscar_noticias_e_classificar(simbolo)
+        distancia_media = ((p_atual - media_200) / media_200) * 100
+        
+        ignorado = "O mercado ignora a recuperação técnica de longo prazo." if p_atual < media_200 else "O mercado ignora o excesso de otimismo (estica acima da média)."
+        
+        # Gestão de Banca (Risco de 1% = 25€)
+        stop_loss = suporte * 0.98 # 2% abaixo do suporte
+        distancia_stop = p_atual - stop_loss
+        lotes = round(25 / distancia_stop, 2) if distancia_stop > 0 else "Ajustar Manual"
+
+        return {
+            "ativo": simbolo.upper(),
+            "preco": round(p_atual, 2),
+            "entrada": round(p_atual, 2),
+            "stop": round(stop_loss, 2),
+            "take_profit": resistencia,
+            "tese": tipo,
+            "ignorado": ignorado,
+            "lotes": lotes,
+            "noticia": noticia
+        }
+    except Exception as e:
+        return {"erro": str(e)}
+        
 def analise_detalhada(simbolo: str):
     try:
         t = yf.Ticker(simbolo)
