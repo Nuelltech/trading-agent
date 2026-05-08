@@ -43,44 +43,63 @@ RADAR_EUROPA = [
 ]
 
 # 5. FUNÇÕES AUXILIARES (INTELIGÊNCIA)
-@app.get("/analise/{simbolo}")
 
 @app.get("/estrategia/{simbolo}")
 def gerar_estrategia(simbolo: str):
     try:
         t = yf.Ticker(simbolo)
-        hist = t.history(period="1y") # Olhamos para 1 ano para ver o "quadro geral"
-        p_atual = hist['Close'].iloc[-1]
+        # Pegamos 2 anos para contexto macro e 60 dias para micro
+        hist_longo = t.history(period="2y")
+        hist_curto = t.history(period="60d")
         
-        # Análise Técnica para Estratégia
-        suporte = round(hist['Low'].tail(30).min(), 2) # Mínimo dos últimos 30 dias
-        resistencia = round(hist['High'].tail(30).max(), 2) # Máximo dos últimos 30 dias
-        media_200 = round(hist['Close'].mean(), 2)
+        p_atual = hist_curto['Close'].iloc[-1]
         
-        # O que o mercado ignora?
+        # --- INTELIGÊNCIA TÉCNICA PRO ---
+        ema_20 = hist_curto['Close'].ewm(span=20).mean().iloc[-1]
+        ema_50 = hist_curto['Close'].ewm(span=50).mean().iloc[-1]
+        volatilidade = hist_curto['Close'].pct_change().std() * 100
+        
+        # Tendência de Médio Prazo
+        tendencia = "BULLISH 🚀" if p_atual > ema_50 else "BEARISH 📉"
+        fase = "Acumulação" if abs(p_atual - ema_20)/p_atual < 0.02 else "Expansão"
+        
+        # Suportes e Resistências "Psicológicas"
+        suporte_critico = round(hist_curto['Low'].min(), 2)
+        resistencia_topo = round(hist_longo['High'].tail(250).max(), 2)
+
+        # --- GESTÃO DE RISCO PROFISSIONAL ---
+        # Stop Loss baseado na volatilidade (ATR simplificado)
+        stop_loss = round(p_atual - (p_atual * (volatilidade/100) * 2), 2)
+        target_1 = round(p_atual + (p_atual - stop_loss) * 2, 2) # Rácio 2:1
+        
+        # --- NARRATIVA DO MERCADO ---
         tipo, noticia = buscar_noticias_e_classificar(simbolo)
-        distancia_media = ((p_atual - media_200) / media_200) * 100
         
-        ignorado = "O mercado ignora a recuperação técnica de longo prazo." if p_atual < media_200 else "O mercado ignora o excesso de otimismo (estica acima da média)."
-        
-        # Gestão de Banca (Risco de 1% = 25€)
-        stop_loss = suporte * 0.98 # 2% abaixo do suporte
-        distancia_stop = p_atual - stop_loss
-        lotes = round(25 / distancia_stop, 2) if distancia_stop > 0 else "Ajustar Manual"
+        # Lógica de Analista: O que o mercado ignora?
+        if p_atual < ema_50 and "beat" in noticia.lower():
+            insight = "O mercado está a castigar o ativo apesar dos fundamentais sólidos. Divergência Bullish detectada."
+        elif p_atual > resistencia_topo * 0.95:
+            insight = "Atenção ao FOMO. Ativo próximo de máxima histórica com exaustão de volume."
+        else:
+            insight = "Consolidação lateral. O mercado aguarda um catalisador macro para romper a média de 50 dias."
 
         return {
             "ativo": simbolo.upper(),
             "preco": round(p_atual, 2),
-            "entrada": round(p_atual, 2),
-            "stop": round(stop_loss, 2),
-            "take_profit": resistencia,
-            "tese": tipo,
-            "ignorado": ignorado,
-            "lotes": lotes,
-            "noticia": noticia
+            "tendencia": tendencia,
+            "fase": fase,
+            "stop": stop_loss,
+            "tp1": target_1,
+            "tp_final": resistencia_topo,
+            "lotes": round(25 / (p_atual - stop_loss), 2) if p_atual > stop_loss else 0,
+            "insight": insight,
+            "noticia": noticia,
+            "risco": "MÉDIO" if volatilidade < 2.5 else "ALTO 🔥"
         }
     except Exception as e:
         return {"erro": str(e)}
+
+@app.get("/analise/{simbolo}")
         
 def analise_detalhada(simbolo: str):
     try:
