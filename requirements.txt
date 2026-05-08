@@ -7,3 +7,4 @@ lxml
 html5lib
 jinja2
 python-multipart
+httpx
