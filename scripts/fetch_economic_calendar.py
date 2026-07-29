@@ -166,56 +166,66 @@ def save_economic_events(records):
         return
         
     logging.info(f"💾 Salvando {len(records)} eventos no 'economic_calendar'...")
-    with engine.connect() as conn:
-        trans = conn.begin()
+    
+    for attempt in range(1, 4):
         try:
-            saved = 0
-            for r in records:
-                sql = text("""
-                    INSERT INTO economic_calendar 
-                    (event_name, country, currency, event_timestamp, impact_level, actual_val, forecast_val, previous_val, unit, source_provider)
-                    VALUES (:event_name, :country, :currency, :event_timestamp, :impact_level, :actual_val, :forecast_val, :previous_val, :unit, :source_provider)
-                    ON DUPLICATE KEY UPDATE 
-                        actual_val = VALUES(actual_val),
-                        forecast_val = VALUES(forecast_val),
-                        previous_val = VALUES(previous_val),
-                        impact_level = VALUES(impact_level);
-                """)
-                conn.execute(sql, r)
-                saved += 1
-            trans.commit()
-            logging.info(f"🎉 {saved} eventos salvos/atualizados na tabela 'economic_calendar'!")
+            with engine.connect() as conn:
+                trans = conn.begin()
+                saved = 0
+                for r in records:
+                    sql = text("""
+                        INSERT INTO economic_calendar 
+                        (event_name, country, currency, event_timestamp, impact_level, actual_val, forecast_val, previous_val, unit, source_provider)
+                        VALUES (:event_name, :country, :currency, :event_timestamp, :impact_level, :actual_val, :forecast_val, :previous_val, :unit, :source_provider)
+                        ON DUPLICATE KEY UPDATE 
+                            actual_val = VALUES(actual_val),
+                            forecast_val = VALUES(forecast_val),
+                            previous_val = VALUES(previous_val),
+                            impact_level = VALUES(impact_level);
+                    """)
+                    conn.execute(sql, r)
+                    saved += 1
+                trans.commit()
+                logging.info(f"🎉 {saved} eventos salvos/atualizados na tabela 'economic_calendar'!")
+                return
         except Exception as e:
-            trans.rollback()
-            logging.error(f"❌ Erro ao salvar eventos económicos: {e}")
+            logging.warning(f"⚠️ Tentativa {attempt}/3 falhou ao ligar à DB ({e}). A tentar novamente em 3s...")
+            import time
+            time.sleep(3)
+    logging.error("❌ Falha permanente ao salvar eventos económicos após 3 tentativas.")
 
 def save_corporate_earnings(records):
     if not records:
         return
         
     logging.info(f"💾 Salvando {len(records)} relatórios no 'corporate_earnings_calendar'...")
-    with engine.connect() as conn:
-        trans = conn.begin()
+    
+    for attempt in range(1, 4):
         try:
-            saved = 0
-            for r in records:
-                sql = text("""
-                    INSERT INTO corporate_earnings_calendar 
-                    (symbol, company_name, event_date, time_of_day, eps_estimate, eps_actual, revenue_estimate, revenue_actual, fiscal_period, source_provider)
-                    VALUES (:symbol, :company_name, :event_date, :time_of_day, :eps_estimate, :eps_actual, :revenue_estimate, :revenue_actual, :fiscal_period, :source_provider)
-                    ON DUPLICATE KEY UPDATE 
-                        eps_actual = VALUES(eps_actual),
-                        eps_estimate = VALUES(eps_estimate),
-                        revenue_actual = VALUES(revenue_actual),
-                        revenue_estimate = VALUES(revenue_estimate);
-                """)
-                conn.execute(sql, r)
-                saved += 1
-            trans.commit()
-            logging.info(f"🎉 {saved} registos de earnings salvos na tabela 'corporate_earnings_calendar'!")
+            with engine.connect() as conn:
+                trans = conn.begin()
+                saved = 0
+                for r in records:
+                    sql = text("""
+                        INSERT INTO corporate_earnings_calendar 
+                        (symbol, company_name, event_date, time_of_day, eps_estimate, eps_actual, revenue_estimate, revenue_actual, fiscal_period, source_provider)
+                        VALUES (:symbol, :company_name, :event_date, :time_of_day, :eps_estimate, :eps_actual, :revenue_estimate, :revenue_actual, :fiscal_period, :source_provider)
+                        ON DUPLICATE KEY UPDATE 
+                            eps_actual = VALUES(eps_actual),
+                            eps_estimate = VALUES(eps_estimate),
+                            revenue_actual = VALUES(revenue_actual),
+                            revenue_estimate = VALUES(revenue_estimate);
+                    """)
+                    conn.execute(sql, r)
+                    saved += 1
+                trans.commit()
+                logging.info(f"🎉 {saved} registos de earnings salvos na tabela 'corporate_earnings_calendar'!")
+                return
         except Exception as e:
-            trans.rollback()
-            logging.error(f"❌ Erro ao salvar earnings: {e}")
+            logging.warning(f"⚠️ Tentativa {attempt}/3 falhou ao ligar à DB ({e}). A tentar novamente em 3s...")
+            import time
+            time.sleep(3)
+    logging.error("❌ Falha permanente ao salvar earnings após 3 tentativas.")
 
 def main():
     eco_records = fetch_economic_calendar_fmp()
