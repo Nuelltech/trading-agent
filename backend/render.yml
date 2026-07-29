@@ -1,0 +1,39 @@
+# render.yaml
+services:
+  # API Backend
+  - type: web
+    name: trading-agent-api
+    env: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.app.api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - fromGroup: trading-agent-env
+
+  # News Collector Worker
+  - type: worker
+    name: trading-agent-news-worker
+    env: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: python backend/app/workers/news_worker.py
+    envVars:
+      - fromGroup: trading-agent-env
+
+  # Analysis Worker
+  - type: worker
+    name: trading-agent-analysis-worker
+    env: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: python backend/app/workers/analysis_worker.py
+    envVars:
+      - fromGroup: trading-agent-env
+
+  # Trading Worker
+  - type: worker
+    name: trading-agent-trading-worker
+    env: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: python backend/app/workers/trading_worker.py
+    envVars:
+      - fromGroup: trading-agent-env

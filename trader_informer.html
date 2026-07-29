@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Desk V7 - Pro</title>
+    <!-- SUBSTITUIR por isto (CDN estável para produção) -->
+<link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        .card { transition: all 0.3s ease; }
+        .card:hover { transform: translateY(-4px); border-color: #6366f1; }
+        .score-badge { font-size: 10px; font-weight: 900; padding: 2px 8px; border-radius: 99px; }
+    </style>
+</head>
+<body class="bg-[#0f172a] text-slate-200 font-sans">
+    <div class="container mx-auto px-4 py-8 max-w-6xl">
+        
+        <div class="flex flex-wrap justify-between items-center mb-10 bg-slate-800/50 p-6 rounded-2xl border border-slate-700 shadow-2xl">
+            <div>
+                <h1 class="text-3xl font-black bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent italic">TRADING DESK <span class="text-xs font-mono text-slate-500 not-italic">V7 ALPHA</span></h1>
+                <p id="macro-desc" class="text-slate-500 text-[10px] mt-1 font-bold tracking-widest uppercase italic">Carregando contexto macro...</p>
+            </div>
+            <div class="flex space-x-8">
+                <div class="text-center">
+                    <p class="text-[10px] uppercase text-slate-500 font-black">VIX (Fear)</p>
+                    <p id="vix-val" class="text-2xl font-mono font-bold text-yellow-400">--</p>
+                </div>
+                <div id="market-badge" class="px-4 py-2 bg-slate-700 rounded-xl border border-slate-600 flex items-center">
+                    <span id="market-status" class="text-xs font-black uppercase">---</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="mb-12">
+            <div class="flex gap-3 bg-slate-800/30 p-2 rounded-xl border border-slate-700">
+                <input type="text" id="input-vigilancia" placeholder="Introduzir Ticker (ex: UBER, TSLA)..." class="flex-1 bg-transparent px-4 py-3 text-white focus:outline-none font-mono">
+                <button onclick="adicionarVigilancia()" class="bg-indigo-600 hover:bg-indigo-500 px-8 py-3 rounded-lg font-black text-xs uppercase tracking-widest transition-all">Gerar Estratégia</button>
+            </div>
+            <div id="vigilancia-container" class="mt-8 space-y-6"></div>
+        </div>
+
+        <div class="flex space-x-4 mb-8 overflow-x-auto pb-4">
+            <button onclick="loadRadar('usa')" class="bg-slate-800 hover:bg-blue-600 px-6 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all">USA</button>
+            <button onclick="loadRadar('europa')" class="bg-slate-800 hover:bg-indigo-600 px-6 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all">Europa</button>
+            <button onclick="loadRadar('commodities')" class="bg-slate-800 hover:bg-amber-600 px-6 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all">Commo</button>
+        </div>
+
+        <div id="loader" class="hidden text-center py-10 animate-pulse text-indigo-400 font-mono text-xs">ANALISANDO CONFLUÊNCIAS TÉCNICAS...</div>
+        <div id="cards-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
+    </div>
+
+    <script>
+        const API_BASE = "https://trading-agent-hfqa.onrender.com";
+
+        async function adicionarVigilancia() {
+            const input = document.getElementById('input-vigilancia');
+            const simbolo = input.value.trim().toUpperCase();
+            if(!simbolo) return;
+            const loader = document.getElementById('loader');
+            loader.classList.remove('hidden');
+
+            try {
+                const res = await fetch(`${API_BASE}/estrategia/${simbolo}`);
+                const data = await res.json();
+                loader.classList.add('hidden');
+
+                if(data.macro && !data.macro.permitir_entradas) {
+                    alert(`MODO DEFENSIVO ATIVO: ${data.macro.descricao}`);
+                }
+
+                const fatoresHtml = data.fatores.map(f => `<li class="text-[10px] font-bold py-1 border-b border-slate-700/50">${f}</li>`).join('');
+
+                const cardHtml = `
+                    <div class="bg-slate-800 border border-slate-700 rounded-2xl p-8 shadow-2xl animate-fade-in">
+                        <div class="flex justify-between items-start mb-6 border-b border-slate-700 pb-6">
+                            <div>
+                                <div class="flex items-center gap-3">
+                                    <h2 class="text-3xl font-black">${data.ativo}</h2>
+                                    <span class="bg-indigo-500/20 text-indigo-400 px-3 py-1 rounded-full text-[10px] font-black">SCORE ${data.score}</span>
+                                </div>
+                                <p class="text-xs font-bold text-slate-500 mt-2 uppercase tracking-tighter">${data.decisao}</p>
+                            </div>
+                            <div class="text-right font-mono">
+                                <p class="text-2xl font-bold text-white">${data.preco}€</p>
+                                <p class="text-[10px] text-yellow-500">ATR: ${data.atr}</p>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                            <div class="bg-slate-900/50 p-4 rounded-xl">
+                                <p class="text-blue-400 text-[10px] font-black uppercase mb-4 tracking-widest">Plano de Execução (Banca 2.5k)</p>
+                                <div class="space-y-3 font-mono text-xs">
+                                    <div class="flex justify-between border-b border-slate-800 pb-1"><span>Lotes Sugeridos:</span><span class="text-white">${data.posicao.lotes}</span></div>
+                                    <div class="flex justify-between text-red-400 font-bold"><span>Stop Loss (2xATR):</span><span>${data.posicao.stop}€</span></div>
+                                    <div class="flex justify-between text-green-400 font-bold"><span>Take Profit 1 (50%):</span><span>${data.posicao.tp1}€</span></div>
+                                    <div class="flex justify-between text-slate-400"><span>Target 2 (30%):</span><span>${data.posicao.tp2}€</span></div>
+                                    <div class="flex justify-between text-yellow-500"><span>Target Final (20%):</span><span>${data.posicao.tp3}€</span></div>
+                                </div>
+                            </div>
+                            <div>
+                                <p class="text-indigo-400 text-[10px] font-black uppercase mb-4 tracking-widest">Confluências Técnicas</p>
+                                <ul class="list-none">${fatoresHtml}</ul>
+                                <div class="mt-4 p-3 bg-slate-900 rounded text-[11px] italic text-slate-400 border-l-2 border-indigo-500">
+                                    "${data.noticias.classificacao.sentimento}: ${data.noticias.classificacao.acao}"
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('vigilancia-container').insertAdjacentHTML('afterbegin', cardHtml);
+                input.value = '';
+            } catch (e) { alert("Símbolo inválido ou servidor em standby."); loader.classList.add('hidden'); }
+        }
+
+        async function loadRadar(tipo) {
+            const container = document.getElementById('cards-container');
+            const loader = document.getElementById('loader');
+            container.innerHTML = '';
+            loader.classList.remove('hidden');
+            try {
+                const res = await fetch(`${API_BASE}/radar/${tipo}`);
+                const data = await res.json();
+                loader.classList.add('hidden');
+                data.data.forEach(ativo => {
+                    container.innerHTML += `
+                        <div class="card bg-slate-800/40 border border-slate-700 rounded-xl p-5 shadow-sm">
+                            <div class="flex justify-between items-start mb-4">
+                                <h3 class="text-xl font-black">${ativo.ativo}</h3>
+                                <span class="bg-red-500/10 text-red-500 px-2 py-1 rounded text-xs font-bold">-${ativo.desconto}</span>
+                            </div>
+                            <div class="flex gap-2 mb-3">
+                                <span class="text-[9px] font-black bg-slate-700 px-2 py-0.5 rounded text-indigo-300 uppercase">${ativo.sentimento}</span>
+                                <span class="text-[9px] font-black bg-slate-700 px-2 py-0.5 rounded text-slate-400 uppercase">${ativo.volume.split(' ')[0]}</span>
+                            </div>
+                            <p class="text-slate-400 text-xs mb-6 italic leading-relaxed">"${ativo.noticia}"</p>
+                            <button onclick="adicionarVigilanciaManual('${ativo.ativo}')" class="w-full bg-indigo-600 hover:bg-indigo-500 py-2 rounded text-[10px] font-black uppercase tracking-widest transition-all">Analisar Estratégia</button>
+                        </div>
+                    `;
+                });
+            } catch (e) { console.error(e); }
+        }
+
+        function adicionarVigilanciaManual(ticker) {
+            document.getElementById('input-vigilancia').value = ticker;
+            adicionarVigilancia();
+        }
+
+        fetch(`${API_BASE}/macro`).then(res => res.json()).then(data => {
+            document.getElementById('vix-val').innerText = data.vix;
+            document.getElementById('macro-desc').innerText = data.contexto.descricao;
+            const s = document.getElementById('market-status');
+            s.innerText = data.contexto.modo;
+        });
+
+        loadRadar('usa');
+    </script>
+</body>
+</html>
