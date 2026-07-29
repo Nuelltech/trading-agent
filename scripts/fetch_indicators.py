@@ -101,6 +101,11 @@ def fetch_yfinance_data():
                 low_val = float(latest["Low"]) * info["multiplier"] if "Low" in latest else None
                 volume_val = int(latest["Volume"]) if "Volume" in latest and not pd.isna(latest["Volume"]) else 0
                 
+                # Sanitização Matemática de OHLC (Impede anomalias em Futuros como GC=F, CL=F)
+                if open_val is not None and high_val is not None and low_val is not None:
+                    high_val = max(high_val, open_val, close_val)
+                    low_val = min(low_val, open_val, close_val)
+
                 records.append({
                     "symbol": ticker,
                     "name": info["name"],
