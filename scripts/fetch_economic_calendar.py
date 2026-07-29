@@ -39,7 +39,7 @@ COUNTRY_CURRENCY_MAP = {
 OFFICIAL_REAL_SCHEDULE_2026 = [
     # EUA - Política Monetária & Inflação (Datas Reais FOMC / BLS / BEA)
     {"event_name": "Fed Interest Rate Decision", "country": "EUA", "currency": "USD", "event_timestamp": "2026-07-29 19:00:00", "impact_level": "HIGH", "actual_val": 3.75, "forecast_val": 3.75, "previous_val": 3.75, "unit": "%", "source_provider": "FED_OFFICIAL"},
-    {"event_name": "Fed Interest Rate Decision (Próxima)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-09-16 19:00:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 3.50, "previous_val": 3.75, "unit": "%", "source_provider": "FED_OFFICIAL"},
+    {"event_name": "Fed Interest Rate Decision (Próxima)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-09-16 19:00:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 3.75, "previous_val": 3.75, "unit": "%", "source_provider": "FED_OFFICIAL"},
     {"event_name": "US Core CPI (MoM)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-12 12:30:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 0.2, "previous_val": 0.3, "unit": "%", "source_provider": "BLS_OFFICIAL"},
     {"event_name": "US CPI (YoY)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-12 12:30:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 2.9, "previous_val": 3.0, "unit": "%", "source_provider": "BLS_OFFICIAL"},
     {"event_name": "US PPI (MoM)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-13 12:30:00", "impact_level": "MEDIUM", "actual_val": None, "forecast_val": 0.1, "previous_val": 0.2, "unit": "%", "source_provider": "BLS_OFFICIAL"},
