@@ -160,23 +160,58 @@ def save_records_to_db(records):
         logging.warning("Nenhum registro para salvar na base de dados.")
         return
 
-    logging.info(f"💾 Salvando {len(records)} registros na base de dados MySQL...")
+    logging.info(f"💾 Salvando {len(records)} registros brutos na Staging...")
+    
+    # Import do Validador de Data Quality
+    from app.services.data_validator import validate_ohlc_record
     
     with engine.connect() as conn:
         trans = conn.begin()
         try:
-            # Obter mapa de (ticker -> id) do catálogo
+            # 1. Escrever na tabela Staging
+            for rec in records:
+                sql_staging = text("""
+                    INSERT INTO staging_indicator_values (symbol, timestamp, open_val, high_val, low_val, value, volume)
+                    VALUES (:symbol, :timestamp, :open_val, :high_val, :low_val, :value, :volume)
+                """)
+                conn.execute(sql_staging, {
+                    "symbol": rec["symbol"],
+                    "timestamp": rec["timestamp"],
+                    "open_val": rec["open_val"],
+                    "high_val": rec["high_val"],
+                    "low_val": rec["low_val"],
+                    "value": rec["value"],
+                    "volume": rec["volume"]
+                })
+            trans.commit()
+            logging.info(f"✅ {len(records)} cotações salvas na tabela 'staging_indicator_values'.")
+        except Exception as e:
+            trans.rollback()
+            logging.error(f"❌ Erro ao salvar na Staging: {e}")
+
+    # 2. Executar Data Quality Engine & Mover para Produção (indicator_values)
+    logging.info("🛡️ Executando Data Quality Engine & Validação em Produção...")
+    with engine.connect() as conn:
+        trans = conn.begin()
+        try:
             catalog_rows = conn.execute(text("SELECT id, ticker FROM indicators_catalog")).fetchall()
             catalog_map = {row[1]: row[0] for row in catalog_rows}
             
             saved_count = 0
+            quarantined_count = 0
+            
             for rec in records:
-                indicator_id = catalog_map.get(rec["symbol"])
-                if not indicator_id:
-                    logging.warning(f"Ticker {rec['symbol']} não encontrado no catálogo.")
+                is_valid, sanitized_rec, err_msg = validate_ohlc_record(rec)
+                if not is_valid:
+                    quarantined_count += 1
                     continue
                     
-                sql = text("""
+                indicator_id = catalog_map.get(sanitized_rec["symbol"])
+                if not indicator_id:
+                    logging.warning(f"Ticker {sanitized_rec['symbol']} não encontrado no catálogo.")
+                    continue
+                    
+                sql_prod = text("""
                     INSERT INTO indicator_values 
                     (indicator_id, symbol, timestamp, value, open_val, high_val, low_val, volume)
                     VALUES (:indicator_id, :symbol, :timestamp, :value, :open_val, :high_val, :low_val, :volume)
@@ -188,23 +223,23 @@ def save_records_to_db(records):
                         volume = VALUES(volume);
                 """)
                 
-                conn.execute(sql, {
+                conn.execute(sql_prod, {
                     "indicator_id": indicator_id,
-                    "symbol": rec["symbol"],
-                    "timestamp": rec["timestamp"],
-                    "value": rec["value"],
-                    "open_val": rec["open_val"],
-                    "high_val": rec["high_val"],
-                    "low_val": rec["low_val"],
-                    "volume": rec["volume"]
+                    "symbol": sanitized_rec["symbol"],
+                    "timestamp": sanitized_rec["timestamp"],
+                    "value": sanitized_rec["value"],
+                    "open_val": sanitized_rec["open_val"],
+                    "high_val": sanitized_rec["high_val"],
+                    "low_val": sanitized_rec["low_val"],
+                    "volume": sanitized_rec["volume"]
                 })
                 saved_count += 1
                 
             trans.commit()
-            logging.info(f"🎉 {saved_count} cotações salvas/atualizadas na tabela 'indicator_values'!")
+            logging.info(f"🎉 Data Quality Concluído: {saved_count} cotações salvas em 'indicator_values' | {quarantined_count} em quarentena.")
         except Exception as e:
             trans.rollback()
-            logging.error(f"❌ Erro ao salvar cotações na DB: {e}")
+            logging.error(f"❌ Erro ao processar validação em Produção: {e}")
 
 def main():
     yf_records = fetch_yfinance_data()

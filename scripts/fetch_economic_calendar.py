@@ -175,14 +175,38 @@ def save_economic_events(records):
     if not records:
         return
         
-    logging.info(f"💾 Salvando {len(records)} eventos no 'economic_calendar'...")
+    logging.info(f"💾 Salvando {len(records)} eventos na Staging...")
+    from app.services.data_validator import validate_economic_calendar_records
     
+    # 1. Escrever na Staging
+    try:
+        with engine.connect() as conn:
+            trans = conn.begin()
+            for r in records:
+                sql_staging = text("""
+                    INSERT INTO staging_economic_calendar 
+                    (event_name, country, currency, event_timestamp, impact_level, actual_val, forecast_val, previous_val, unit, source_provider)
+                    VALUES (:event_name, :country, :currency, :event_timestamp, :impact_level, :actual_val, :forecast_val, :previous_val, :unit, :source_provider)
+                """)
+                conn.execute(sql_staging, r)
+            trans.commit()
+            logging.info(f"✅ {len(records)} eventos salvos na tabela 'staging_economic_calendar'.")
+    except Exception as e:
+        logging.error(f"Erro ao gravar eventos na Staging: {e}")
+
+    # 2. Validar no Data Quality Engine & Mover para Produção
+    valid_records, rejected_records = validate_economic_calendar_records(records)
+    logging.info(f"🛡️ Data Quality Engine: {len(valid_records)} eventos aprovados | {len(rejected_records)} em quarentena.")
+    
+    if not valid_records:
+        return
+
     for attempt in range(1, 4):
         try:
             with engine.connect() as conn:
                 trans = conn.begin()
                 saved = 0
-                for r in records:
+                for r in valid_records:
                     sql = text("""
                         INSERT INTO economic_calendar 
                         (event_name, country, currency, event_timestamp, impact_level, actual_val, forecast_val, previous_val, unit, source_provider)
@@ -197,7 +221,7 @@ def save_economic_events(records):
                     conn.execute(sql, r)
                     saved += 1
                 trans.commit()
-                logging.info(f"🎉 {saved} eventos salvos/atualizados na tabela 'economic_calendar'!")
+                logging.info(f"🎉 {saved} eventos validados e salvos na tabela 'economic_calendar'!")
                 return
         except Exception as e:
             logging.warning(f"⚠️ Tentativa {attempt}/3 falhou ao ligar à DB ({e}). A tentar novamente em 3s...")
