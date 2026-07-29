@@ -41,9 +41,9 @@ INSERT INTO indicators_catalog (name, category, ticker, data_provider, region, v
 ('VSTOXX Euro Volatility', 'VOLATILITY', 'VSTOXX', 'FRED_API', 'Europa', 1.0, 'Stress e volatilidade Euro Stoxx 50'),
 
 -- Obrigações Soberanas (Yields & ETFs)
-('US 10-Year Treasury Yield', 'BONDS', '^TNX', 'YFINANCE', 'EUA', 0.1, 'Yield US 10Y (Dividir por 10 no yfinance)'),
+('US 10-Year Treasury Yield', 'BONDS', '^TNX', 'YFINANCE', 'EUA', 1.0, 'Yield US 10Y'),
 ('US 2-Year Treasury Yield', 'BONDS', 'DGS2', 'FRED_API', 'EUA', 1.0, 'Yield US 2Y vinda da FRED API'),
-('US 30-Year Treasury Yield', 'BONDS', '^TYX', 'YFINANCE', 'EUA', 0.1, 'Yield US 30Y (Dividir por 10 no yfinance)'),
+('US 30-Year Treasury Yield', 'BONDS', '^TYX', 'YFINANCE', 'EUA', 1.0, 'Yield US 30Y'),
 ('Bund Alemão 10-Year Yield', 'BONDS', 'IRLTLT01DEM156N', 'FRED_API', 'Europa', 1.0, 'Referência dívida Zona Euro'),
 ('Gilt UK 10-Year Yield', 'BONDS', 'IRLTLT01GBM156N', 'FRED_API', 'Reino Unido', 1.0, 'Referência dívida UK'),
 ('JGB Japonês 10-Year Yield', 'BONDS', 'IRLTLT01JPM156N', 'FRED_API', 'Japão', 1.0, 'Política monetária BoJ'),

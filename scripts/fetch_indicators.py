@@ -26,8 +26,8 @@ YFINANCE_MAP = {
     "^VIX": {"name": "VIX", "multiplier": 1.0},
     
     # Obrigações EUA
-    "^TNX": {"name": "US 10Y Yield", "multiplier": 0.1},
-    "^TYX": {"name": "US 30Y Yield", "multiplier": 0.1},
+    "^TNX": {"name": "US 10Y Yield", "multiplier": 1.0},
+    "^TYX": {"name": "US 30Y Yield", "multiplier": 1.0},
     "TLT":  {"name": "TLT ETF", "multiplier": 1.0},
     
     # Forex
