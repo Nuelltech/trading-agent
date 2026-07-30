@@ -246,8 +246,24 @@ def main():
     fred_records = fetch_fred_data()
     
     total_records = yf_records + fred_records
-    logging.info(f"Total de {len(total_records)} indicadores recolhidos com sucesso!")
+    logging.info(f"Total de {len(total_records)}/42 indicadores recolhidos com sucesso!")
     
+    # Identificar tickers ausentes do catálogo e reportar no log
+    fetched_symbols = {r["symbol"] for r in total_records}
+    try:
+        with engine.connect() as conn:
+            catalog_rows = conn.execute(text("SELECT ticker FROM indicators_catalog")).fetchall()
+            catalog_symbols = {row[0] for row in catalog_rows}
+            missing = catalog_symbols - fetched_symbols
+            if missing:
+                logging.info(f"ℹ️ {len(missing)} tickers não foram recolhidos nesta corrida: {sorted(list(missing))}")
+                if not FRED_API_KEY:
+                    logging.info("  └─ Razão principal: FRED_API_KEY não configurada nos Secrets do GitHub (afeta DGS2, Bund 10Y, Gilt 10Y, JGB 10Y).")
+                if "VSTOXX" in missing:
+                    logging.info("  └─ Razão VSTOXX: Ticker de volatilidade europeu requer mapeamento de símbolo alternativo (^V2TX).")
+    except Exception as e:
+        logging.debug(f"Não foi possível verificar catálogo: {e}")
+
     # Salvar registros no banco de dados MySQL
     save_records_to_db(total_records)
 
