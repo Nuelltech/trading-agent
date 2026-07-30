@@ -17,13 +17,13 @@ import requests
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 NOTION_API_KEY = os.getenv("NOTION_API_KEY", "")
-NOTION_LIQUIDITY_DATABASE_ID = os.getenv("NOTION_LIQUIDITY_DATABASE_ID", "d541f7d1-cc48-4707-8e6d-e5010b2522e4")
 
-def build_notion_liquidity_payload(signal: Dict[str, Any], database_id: str = NOTION_LIQUIDITY_DATABASE_ID) -> Dict[str, Any]:
+def build_notion_liquidity_payload(signal: Dict[str, Any], database_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Constrói o payload JSON estritamente numérico e categórico para a API do Notion.
     Retorna estrutura compatível com Notion API v1 /pages.
     """
+    db_id = database_id or os.getenv("NOTION_LIQUIDITY_DATABASE_ID", "")
     symbol = signal.get("symbol", "N/A")
     event_type = signal.get("event_type", "SWEEP")
     tipo_sinal = "Bullish Sweep" if event_type == "SWEEP_FUNDO" else "Bearish Sweep"
@@ -35,7 +35,7 @@ def build_notion_liquidity_payload(signal: Dict[str, Any], database_id: str = NO
         timestamp_iso += "T00:00:00"
 
     payload = {
-        "parent": {"database_id": database_id},
+        "parent": {"database_id": db_id},
         "properties": {
             "Ativo": {
                 "title": [
@@ -81,8 +81,9 @@ def build_notion_liquidity_payload(signal: Dict[str, Any], database_id: str = NO
 
 def publish_liquidity_signal_to_notion(signal: Dict[str, Any]) -> bool:
     """Envia um registo de sinal de liquidez para a database do Notion 'Sinais de Liquidez'"""
-    if not NOTION_API_KEY:
-        logging.warning("⚠️ [NOTION] NOTION_API_KEY não configurada. Escrita no Notion ignorada.")
+    db_id = os.getenv("NOTION_LIQUIDITY_DATABASE_ID", "")
+    if not NOTION_API_KEY or not db_id:
+        logging.warning("⚠️ [NOTION] NOTION_API_KEY ou NOTION_LIQUIDITY_DATABASE_ID não configuradas nas variáveis de ambiente. Escrita ignorada.")
         return False
         
     url = "https://api.notion.com/v1/pages"
