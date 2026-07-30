@@ -98,24 +98,11 @@ def validate_ohlc_record(record: Dict[str, Any]) -> Tuple[bool, Dict[str, Any], 
     high_val = float(record.get("high_val", value))
     low_val = float(record.get("low_val", value))
 
-    # 1. Ajuste Automático de Escala de Yields (^TNX, ^TYX) se detetada divisão incorreta (Yahoo Finance scale issue)
-    if symbol in ["^TNX", "^TYX"]:
-        if value < 0.1:
-            corrected_value = value * 100.0
-            logging.info(f"🔧 Correção automática de escala em {symbol} (x100): {value} -> {corrected_value}%")
-            value = corrected_value
-            record["value"] = value
-        elif 0.1 <= value < 0.5:
-            corrected_value = value * 10.0
-            logging.info(f"🔧 Correção automática de escala em {symbol} (x10): {value} -> {corrected_value}%")
-            value = corrected_value
-            record["value"] = value
-
-    # 2. Verificação de Plausibilidade Rígida
+    # 1. Verificação de Plausibilidade Rígida (Sem mutação silenciosa de escala - Regra estrita do Consultor 1)
     if symbol in PLAUSIBILITY_LIMITS:
         limits = PLAUSIBILITY_LIMITS[symbol]
         if not (limits["min"] <= value <= limits["max"]):
-            msg = f"Valor {value} fora do intervalo de plausibilidade esperado [{limits['min']}, {limits['max']}]"
+            msg = f"Valor lido {value} fora do intervalo de plausibilidade esperado [{limits['min']}, {limits['max']}]. Possível anomalia de escala da fonte (requer revisão manual)."
             log_anomaly("indicator_values", symbol, value, f"[{limits['min']}, {limits['max']}]", "OUTOFBOUNDS_PLAUSIBILITY", msg)
             return False, record, msg
 

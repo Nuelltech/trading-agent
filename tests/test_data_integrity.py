@@ -32,18 +32,18 @@ class TestDataIntegrity(unittest.TestCase):
         self.assertEqual(sanitized["high_val"], 1.0870)
         self.assertEqual(sanitized["low_val"], 1.0820)
 
-    def test_yield_scale_auto_correction(self):
+    def test_yield_scale_quarantine_rejection(self):
         record = {
             "symbol": "^TNX",
-            "value": 0.0463,  # Escala errada (dividida por 100)
+            "value": 0.0463,  # Escala errada (dividida por 100) -> Deve ser rejeitada para quarentena sem mutação silenciosa
             "open_val": 0.0463,
             "high_val": 0.0463,
             "low_val": 0.0463,
             "volume": 0
         }
         is_valid, sanitized, msg = validate_ohlc_record(record)
-        self.assertTrue(is_valid)
-        self.assertGreaterEqual(sanitized["value"], 0.4)  # Correção de escala ativada
+        self.assertFalse(is_valid)
+        self.assertIn("fora do intervalo de plausibilidade", msg)
 
     def test_out_of_bounds_rejection(self):
         record = {
