@@ -487,87 +487,117 @@ def phase4_inject_notion_initial(packages: List[Dict[str, Any]], radar_48h: str)
 
     return updated_packages
 
+def _parse_retry_delay(error_body: dict) -> float:
+    """Extrai o retryDelay da resposta 429 da API do Google e converte para segundos."""
+    try:
+        details = error_body.get("error", {}).get("details", [])
+        for d in details:
+            if d.get("@type") == "type.googleapis.com/google.rpc.RetryInfo":
+                delay_str = d.get("retryDelay", "60s")
+                # Suporta '45s', '45.5s', '0s', '2.763307ms'
+                if delay_str.endswith("ms"):
+                    return max(1.0, float(delay_str[:-2]) / 1000.0)
+                elif delay_str.endswith("s"):
+                    return max(5.0, float(delay_str[:-1]))
+    except Exception:
+        pass
+    return 60.0  # default seguro
+
 def call_gemini_api(prompt: str, api_key: str) -> str:
     """
-    Chama a API do Google Gemini para gerar um veredito tático.
-    Tenta primeiro o novo SDK `google.genai` (v2), depois cai para REST nativo,
-    e por último para o SDK legado `google.generativeai`.
+    Chama a API do Google Gemini com retry inteligente baseado no retryDelay da resposta 429.
+    Sequência: SDK google.genai (v2) → REST HTTP nativa.
+    Apenas tenta modelos disponíveis na chave (gemini-2.0-flash).
     """
     import time
+    AVAILABLE_MODELS = ["gemini-2.0-flash"]  # Modelos confirmados disponíveis no free tier
 
     # ─── ABORDAGEM 1: Novo SDK google.genai (recomendado pela Google) ───────────
     try:
         from google import genai
         client = genai.Client(api_key=api_key)
-        for model_name in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]:
+        for model_name in AVAILABLE_MODELS:
             try:
-                logging.info(f"🤖 [GEMINI SDK v2] Tentando modelo [{model_name}] via google.genai...")
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt
-                )
+                logging.info(f"🤖 [GEMINI SDK v2] Tentando [{model_name}]...")
+                response = client.models.generate_content(model=model_name, contents=prompt)
                 if response and response.text:
                     text = response.text.strip()
-                    if len(text) > 50:  # Veredito real, não um fallback curto
-                        logging.info(f"✨ [GEMINI SDK v2] Veredito gerado via [{model_name}]! ({len(text)} caracteres)")
+                    if len(text) > 50:
+                        logging.info(f"✨ [GEMINI SDK v2] Veredito via [{model_name}]! ({len(text)} chars)")
                         return text
             except Exception as sdk_err:
-                logging.warning(f"⚠️ [GEMINI SDK v2] [{model_name}] falhou: {sdk_err}")
-                time.sleep(1)
+                err_str = str(sdk_err)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    # Extrair retryDelay do erro para esperar o tempo certo
+                    try:
+                        import json, re
+                        json_match = re.search(r'\{.*\}', err_str, re.DOTALL)
+                        if json_match:
+                            err_body = json.loads(json_match.group())
+                            wait_s = _parse_retry_delay(err_body)
+                        else:
+                            wait_s = 65.0
+                    except Exception:
+                        wait_s = 65.0
+                    logging.warning(f"⚠️ [GEMINI SDK v2] Quota 429 em [{model_name}]. Aguardando {wait_s:.0f}s (retryDelay da API)...")
+                    time.sleep(wait_s)
+                    # Tentar de novo após esperar o tempo indicado pela API
+                    try:
+                        response = client.models.generate_content(model=model_name, contents=prompt)
+                        if response and response.text and len(response.text.strip()) > 50:
+                            logging.info(f"✨ [GEMINI SDK v2] Veredito (retry) via [{model_name}]! ({len(response.text.strip())} chars)")
+                            return response.text.strip()
+                    except Exception as retry_err:
+                        logging.warning(f"⚠️ [GEMINI SDK v2] Retry também falhou para [{model_name}]: {retry_err}")
+                else:
+                    logging.warning(f"⚠️ [GEMINI SDK v2] [{model_name}] falhou: {err_str[:150]}")
                 continue
     except ImportError:
-        logging.warning("⚠️ [GEMINI SDK v2] Pacote google-genai não instalado. Tentando REST...")
+        logging.warning("⚠️ [GEMINI SDK v2] google-genai não instalado. Tentando REST...")
     except Exception as e:
         logging.warning(f"⚠️ [GEMINI SDK v2] Falha geral: {e}")
 
-    # ─── ABORDAGEM 2: REST HTTP nativa (gemini-2.0-flash via v1beta) ─────────────
-    rest_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
-    rest_endpoints = [
-        "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
-        "https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={key}",
-    ]
-    for model_name in rest_models:
-        for ep in rest_endpoints:
-            url = ep.format(model=model_name, key=api_key)
-            try:
-                logging.info(f"🤖 [GEMINI REST] Tentando [{model_name}]...")
-                res = requests.post(url, headers={"Content-Type": "application/json"},
-                                    json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=20)
-                if res.status_code == 200:
-                    candidates = res.json().get("candidates", [])
-                    if candidates:
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        if parts:
-                            text = parts[0].get("text", "").strip()
-                            if text and len(text) > 50:
-                                logging.info(f"✨ [GEMINI REST] Veredito via [{model_name}]! ({len(text)} caracteres)")
-                                return text
-                elif res.status_code == 429:
-                    logging.warning(f"⚠️ [GEMINI REST] Rate limit (429) em [{model_name}]. Aguardando 3s...")
-                    time.sleep(3)
-                    break  # Tentar próximo modelo após espera
-                else:
-                    logging.warning(f"⚠️ [GEMINI REST] [{model_name}] HTTP {res.status_code}")
-            except Exception as e:
-                logging.warning(f"⚠️ [GEMINI REST] Erro em [{model_name}]: {e}")
+    # ─── ABORDAGEM 2: REST HTTP nativa ─────────────────────────────────────────
+    for model_name in AVAILABLE_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        try:
+            logging.info(f"🤖 [GEMINI REST] Tentando [{model_name}]...")
+            res = requests.post(url, headers={"Content-Type": "application/json"},
+                                json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=20)
+            if res.status_code == 200:
+                candidates = res.json().get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        text = parts[0].get("text", "").strip()
+                        if text and len(text) > 50:
+                            logging.info(f"✨ [GEMINI REST] Veredito via [{model_name}]! ({len(text)} chars)")
+                            return text
+            elif res.status_code == 429:
+                wait_s = _parse_retry_delay(res.json())
+                logging.warning(f"⚠️ [GEMINI REST] 429 em [{model_name}]. Aguardando {wait_s:.0f}s (retryDelay da API)...")
+                time.sleep(wait_s)
+                # Retry único após espera
+                try:
+                    res2 = requests.post(url, headers={"Content-Type": "application/json"},
+                                         json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=20)
+                    if res2.status_code == 200:
+                        candidates2 = res2.json().get("candidates", [])
+                        if candidates2:
+                            parts2 = candidates2[0].get("content", {}).get("parts", [])
+                            if parts2:
+                                text2 = parts2[0].get("text", "").strip()
+                                if text2 and len(text2) > 50:
+                                    logging.info(f"✨ [GEMINI REST] Veredito (retry) via [{model_name}]! ({len(text2)} chars)")
+                                    return text2
+                except Exception:
+                    pass
+            else:
+                logging.warning(f"⚠️ [GEMINI REST] [{model_name}] HTTP {res.status_code}")
+        except Exception as e:
+            logging.warning(f"⚠️ [GEMINI REST] Erro em [{model_name}]: {e}")
 
-    # ─── ABORDAGEM 3: SDK Legado google.generativeai (fallback final) ────────────
-    try:
-        import google.generativeai as genai_legacy
-        genai_legacy.configure(api_key=api_key)
-        for sdk_model in ["gemini-1.5-flash", "gemini-pro"]:
-            try:
-                m = genai_legacy.GenerativeModel(sdk_model)
-                r = m.generate_content(prompt)
-                if r and r.text and len(r.text.strip()) > 50:
-                    logging.info(f"✨ [GEMINI SDK legado] Veredito via [{sdk_model}]! ({len(r.text.strip())} caracteres)")
-                    return r.text.strip()
-            except Exception:
-                continue
-    except Exception as ex:
-        logging.error(f"❌ [GEMINI SDK legado] Falha: {ex}")
-
-    logging.error("❌ Todas as abordagens de invocação do Gemini falharam. Sem veredito real.")
+    logging.error("❌ Todas as abordagens Gemini falharam (quota esgotada ou modelos indisponíveis).")
     return ""
 
 def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
@@ -589,15 +619,23 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
 
         logging.info(f"🤖 [FASE 5 AUDIT] A iniciar chamada à API do Gemini para o ativo [{pkg['ticker']}] ({pkg['nome']})...")
 
-        prompt = f"""
-        Você é um Analista Quantitativo e Trader Sénior. Analise o seguinte pacote de dados estruturados para o ativo {pkg['nome']} ({pkg['ticker']}):
-        
-        {pkg}
-
-        Forneça uma resposta direta com:
-        1. Veredito Tático (máximo 3 frases conclusivas focando no momentum, Z-score e catalisadores).
-        2. Viés (escolha exatamente uma palavra: 'Bullish', 'Bearish', ou 'Neutro').
-        """
+        # Prompt comprimido (~90% menos tokens que enviar pkg completo)
+        rm = pkg.get("Regime_Matematico", {})
+        sm = pkg.get("Stress_Macro", {})
+        ap = pkg.get("Acao_Preco_Diaria", {})
+        ev = pkg.get("Calendario_Choque", {}).get("Radar_Eventos_48h", "N/A")
+        prompt = (
+            f"Analista Quant Sénior. Ativo: {pkg['nome']} ({pkg['ticker']}).\n"
+            f"Sessão: Close={ap.get('Close',0):.4f} Open={ap.get('Open',0):.4f} H={ap.get('High',0):.4f} L={ap.get('Low',0):.4f}\n"
+            f"Z-Score20D={rm.get('Z_Score_20D',0):.2f} | Var5D={rm.get('Variacao_5D_Pct',0):.2f}% | "
+            f"Dist_SMA20={rm.get('Distancia_SMA20_Pct',0):.2f}% | ATR_mult={rm.get('Amplitude_vs_ATR','N/A')}\n"
+            f"Macro: VIX={sm.get('VIX_Close',0):.2f} | US10Y={sm.get('TNX_Close',0):.3f} | "
+            f"US2Y={sm.get('DGS2_Close',0):.3f} | Spread10Y2Y={sm.get('Spread_10Y_2Y',0):.3f}\n"
+            f"Eventos48h: {str(ev)[:200]}\n\n"
+            f"Responde apenas com:\n"
+            f"1. Veredito (2-3 frases sobre momentum, Z-score e catalisadores)\n"
+            f"2. Viés: Bullish | Bearish | Neutro"
+        )
 
         try:
             verdict_text = call_gemini_api(prompt, GEMINI_API_KEY)
