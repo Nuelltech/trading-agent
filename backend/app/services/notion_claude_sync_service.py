@@ -339,7 +339,11 @@ def sync_claude_close_todos_ativos() -> bool:
                 }
 
                 if name_col in db_schema:
-                    props[name_col] = {"rich_text": [{"text": {"content": nome}}]}
+                    name_type = db_schema[name_col]
+                    if name_type == "select":
+                        props[name_col] = {"select": {"name": nome}}
+                    elif name_type == "rich_text":
+                        props[name_col] = {"rich_text": [{"text": {"content": nome}}]}
 
                 if cat_col in db_schema:
                     cat_type = db_schema[cat_col]
