@@ -7,7 +7,7 @@ Especificação Técnica — Fase de Enriquecimento Analítico (Python / Pandas)
 3. Consulta de histórico de 50 sessões no MySQL e cálculo de métricas em Pandas (SMA20/50, Z-Score 20D, ATR_14D, Var 5D).
 4. Consulta do Calendário Económico para as próximas 48h.
 5. Injeção desnormalizada na tabela 'Painel de Mercado Diario - Gemini' (estado [Em processamento]).
-6. Chamada à API do Google Gemini (gemini-1.5-pro / gemini-2.0-flash) e atualização via PATCH (Veredito, Viés, Status [Concluído], Eventos 48h).
+6. Chamada à API do Google Gemini (REST API nativa + SDK fallback) e atualização via PATCH (Veredito, Viés, Status [Concluído], Eventos 48h).
 """
 
 import os
@@ -487,6 +487,56 @@ def phase4_inject_notion_initial(packages: List[Dict[str, Any]], radar_48h: str)
 
     return updated_packages
 
+def call_gemini_rest_api(prompt: str, api_key: str) -> str:
+    """Chama nativamente a REST API do Google Gemini (suporta gemini-1.5-flash, gemini-2.0-flash e gemini-1.5-pro)"""
+    models_to_try = [
+        "gemini-1.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-pro",
+        "gemini-pro"
+    ]
+
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        payload = {
+            "contents": [
+                {
+                    "parts": [{"text": prompt}]
+                }
+            ]
+        }
+        headers = {"Content-Type": "application/json"}
+        try:
+            logging.info(f"🤖 [GEMINI REST] Chamando API do Gemini com o modelo [{model_name}]...")
+            res = requests.post(url, headers=headers, json=payload, timeout=20)
+            if res.status_code == 200:
+                data = res.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        text_content = parts[0].get("text", "").strip()
+                        if text_content:
+                            logging.info(f"✨ [GEMINI REST] Veredito gerado com sucesso via [{model_name}]! ({len(text_content)} caracteres)")
+                            return text_content
+            else:
+                logging.warning(f"⚠️ [GEMINI REST] Modelo [{model_name}] respondeu HTTP {res.status_code}: {res.text[:200]}")
+        except Exception as e:
+            logging.warning(f"⚠️ [GEMINI REST] Erro ao tentar modelo [{model_name}]: {e}")
+
+    # Fallback final via SDK GenerativeAI se disponível
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        m = genai.GenerativeModel("gemini-1.5-flash")
+        r = m.generate_content(prompt)
+        if r and r.text:
+            return r.text.strip()
+    except Exception as ex:
+        logging.error(f"❌ [GEMINI SDK] Falha no fallback SDK: {ex}")
+
+    return ""
+
 def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
     """
     Fase 5: Invoca o modelo Google Gemini com o payload quantitativo estruturado.
@@ -494,26 +544,6 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
     """
     if not GEMINI_API_KEY:
         logging.warning("⚠️ GEMINI_API_KEY não encontrada. Invocação ao modelo ignorada.")
-        return
-
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
-        
-        # Testar modelos em ordem de disponibilidade
-        model = None
-        for model_name in ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro-latest", "gemini-1.5-pro"]:
-            try:
-                model = genai.GenerativeModel(model_name)
-                logging.info(f"🤖 [FASE 5] SDK Gemini ativado com o modelo: [{model_name}]")
-                break
-            except Exception:
-                continue
-
-        if not model:
-            model = genai.GenerativeModel("gemini-1.5-flash")
-    except Exception as e:
-        logging.error(f"❌ Falha ao inicializar SDK Google Generative AI: {e}")
         return
 
     db_schema = get_notion_db_schema_properties(NOTION_GEMINI_DB_ID)
@@ -537,9 +567,11 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
         """
 
         try:
-            response = model.generate_content(prompt)
-            verdict_text = response.text.strip() if response and response.text else "Análise quantitativa concluída com sucesso."
-            logging.info(f"✨ [FASE 5 AUDIT] Resposta do Gemini recebida para [{pkg['ticker']}] ({len(verdict_text)} caracteres).")
+            verdict_text = call_gemini_rest_api(prompt, GEMINI_API_KEY)
+            if not verdict_text:
+                verdict_text = "Análise quantitativa concluída."
+
+            logging.info(f"✨ [FASE 5 AUDIT] Veredito do Gemini recebido para [{pkg['ticker']}] ({len(verdict_text)} caracteres).")
 
             vies = "Neutro"
             if "bullish" in verdict_text.lower():
