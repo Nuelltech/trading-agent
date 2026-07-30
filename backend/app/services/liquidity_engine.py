@@ -93,12 +93,15 @@ def analyze_liquidity_sweeps(symbol: str, df: pd.DataFrame, k_factor: float = 1.
     """
     dias_disponiveis = len(df)
     
-    # 1. Salvaguarda Obrigatoria de Cold-Start
+    # 1. Salvaguarda Obrigatoria de Cold-Start (< 60 sessões)
     if dias_disponiveis < 60:
         logging.warning(f"⚠️ [{symbol}] Cold-start ativado: apenas {dias_disponiveis} sessões (mínimo 60 para ATR_60). Sweeps ignorados.")
         return [{
             "symbol": symbol,
             "status": "ATR_60_INCOMPLETO",
+            "status_atr60": "ATR_60_INCOMPLETO",
+            "sweep_detected": False,
+            "threshold": None,
             "message": f"Histórico insuficiente ({dias_disponiveis}/60 sessões)"
         }]
         
@@ -110,8 +113,9 @@ def analyze_liquidity_sweeps(symbol: str, df: pd.DataFrame, k_factor: float = 1.
     df['atr14'] = calculate_atr(df, 14)
     df['atr60'] = calculate_atr(df, 60)
     
-    # Limiar: K * min(ATR_14, 1.5 * ATR_60)
-    df['threshold'] = k_factor * df[['atr14', 'atr60']].apply(lambda r: min(r['atr14'], 1.5 * r['atr60']), axis=1)
+    # Cap do ATR60: min(atr14, 1.5 * atr60)
+    df['atr60_capped'] = df[['atr14', 'atr60']].apply(lambda r: min(r['atr14'], 1.5 * r['atr60']), axis=1)
+    df['threshold'] = k_factor * df['atr60_capped']
     
     # 3. Deteção dos Fractais
     swing_highs, swing_lows = detect_swing_fractals(df, n=3)
@@ -132,6 +136,8 @@ def analyze_liquidity_sweeps(symbol: str, df: pd.DataFrame, k_factor: float = 1.
         low_val = float(current['low'])
         close_val = float(current['close'])
         thresh = float(current['threshold'])
+        atr14_val = float(current['atr14']) if not pd.isna(current['atr14']) else 0.0
+        atr60_capped_val = float(current['atr60_capped']) if not pd.isna(current['atr60_capped']) else 0.0
         
         upper_wick = high_val - max(open_val, close_val)
         lower_wick = min(open_val, close_val) - low_val
@@ -146,11 +152,17 @@ def analyze_liquidity_sweeps(symbol: str, df: pd.DataFrame, k_factor: float = 1.
                     "symbol": symbol,
                     "event_type": "SWEEP_TOPO",
                     "timestamp": timestamp,
-                    "level_broken": prev_high,
+                    "level_broken": round(prev_high, 4),
                     "wick_size": round(upper_wick, 4),
+                    "threshold": round(thresh, 4),
                     "threshold_ratio": round(upper_wick / thresh, 2),
+                    "k_factor": k_factor,
+                    "atr14": round(atr14_val, 4),
+                    "atr60_capped": round(atr60_capped_val, 4),
                     "is_forex": is_forex,
                     "status": "LIQUIDEZ_CONSUMIDA",
+                    "status_atr60": "COMPLETO",
+                    "sweep_detected": True,
                     "details": f"Sweep de Topo: Resistência {prev_high:.4f} perfurada com pavio {upper_wick:.4f} (>= {thresh:.4f})"
                 })
 
@@ -164,11 +176,17 @@ def analyze_liquidity_sweeps(symbol: str, df: pd.DataFrame, k_factor: float = 1.
                     "symbol": symbol,
                     "event_type": "SWEEP_FUNDO",
                     "timestamp": timestamp,
-                    "level_broken": prev_low,
+                    "level_broken": round(prev_low, 4),
                     "wick_size": round(lower_wick, 4),
+                    "threshold": round(thresh, 4),
                     "threshold_ratio": round(lower_wick / thresh, 2),
+                    "k_factor": k_factor,
+                    "atr14": round(atr14_val, 4),
+                    "atr60_capped": round(atr60_capped_val, 4),
                     "is_forex": is_forex,
                     "status": "LIQUIDEZ_CONSUMIDA",
+                    "status_atr60": "COMPLETO",
+                    "sweep_detected": True,
                     "details": f"Sweep de Fundo: Suporte {prev_low:.4f} perfurado com pavio {lower_wick:.4f} (>= {thresh:.4f})"
                 })
                 

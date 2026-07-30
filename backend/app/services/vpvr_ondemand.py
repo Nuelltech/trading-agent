@@ -21,14 +21,19 @@ FOREX_TICKERS = {
     "AUDUSD=X", "USDCAD=X", "EURGBP=X", "EURJPY=X"
 }
 
+class UnsupportedAssetClassError(Exception):
+    """Exceção lançada quando é tentado o cálculo de VPVR em classes de ativos sem volume real (ex: Forex)"""
+    pass
+
 def calculate_vpvr(symbol: str, df: pd.DataFrame, num_bins: int = 50) -> Optional[Dict[str, Any]]:
     """
     Calcula o Volume Profile (POC, HVN, LVN) sob pedido para um ativo com volume real.
-    Retorna None se o ativo for Forex.
+    Lança UnsupportedAssetClassError se o ativo for Forex.
     """
     if symbol in FOREX_TICKERS:
-        logging.warning(f"🚫 [VPVR] Cálculo de Volume Profile BLOQUEADO para {symbol} (Ativo Forex sem volume real OTC).")
-        return None
+        err_msg = f"[VPVR BLOQUEADO] Ativo Forex {symbol} não possui volume centralizado real (OTC). Operação não suportada."
+        logging.warning(err_msg)
+        raise UnsupportedAssetClassError(err_msg)
         
     if df is None or df.empty or 'volume' not in df.columns or df['volume'].sum() == 0:
         logging.warning(f"⚠️ [VPVR] Dados de volume ausentes ou nulos para {symbol}.")
@@ -95,3 +100,41 @@ def calculate_vpvr(symbol: str, df: pd.DataFrame, num_bins: int = 50) -> Optiona
         "total_volume": float(df['volume'].sum()),
         "status": "VPVR_CALCULATED"
     }
+
+def main():
+    import argparse
+    import yfinance as yf
+    
+    parser = argparse.ArgumentParser(description="Calculador de Volume Profile VPVR On-Demand")
+    parser.add_argument("--ticker", required=True, help="Ticker do ativo (ex: BZ=F, GC=F)")
+    parser.add_argument("--days", type=int, default=30, help="Período de dias a analisar")
+    
+    args = parser.parse_args()
+    symbol = args.ticker
+    days = args.days
+    
+    logging.info(f"📊 Executando VPVR On-Demand CLI para {symbol} ({days} dias)...")
+    try:
+        df = yf.download(symbol, period=f"{days}d", interval="1d", progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df = df.reset_index()
+        df.columns = [str(c).lower() for c in df.columns]
+        
+        result = calculate_vpvr(symbol, df)
+        if result:
+            print("\n==================================================")
+            print(f"RESULTADO VPVR ON-DEMAND: {symbol}")
+            print("==================================================")
+            print(f"POC Price (Point of Control): ${result['poc_price']}")
+            print(f"Total Volume:                 {result['total_volume']:,.0f}")
+            print(f"HVN Nodes (High Volume):      {result['hvn_nodes'][:5]}")
+            print(f"LVN Nodes (Low Volume):       {result['lvn_nodes'][:5]}")
+            print("==================================================\n")
+    except UnsupportedAssetClassError as e:
+        print(f"\n[ERRO BLOQUEADO]: {e}\n")
+    except Exception as e:
+        logging.error(f"Erro ao executar VPVR CLI: {e}")
+
+if __name__ == "__main__":
+    main()

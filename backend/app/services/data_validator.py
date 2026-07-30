@@ -65,14 +65,14 @@ CENTRAL_BANK_EVENTS = [
 ]
 
 def log_anomaly(target_table: str, symbol_or_event: str, raw_value: Any, expected_range: str, anomaly_type: str, anomaly_reason: str):
-    """Grava ou deduplica um registo de anomalia na quarentena data_anomalies_log com contador de repetições"""
+    """Grava ou deduplica um registo de anomalia na quarentena data_anomalies_log com escalonamento urgente ao atingir 5 repetições"""
     logging.warning(f"⚠️ QUARENTENA DATA QUALITY [{anomaly_type}] {symbol_or_event}: {anomaly_reason}")
     try:
         with engine.connect() as conn:
             trans = conn.begin()
             # 1. Verificar se já existe uma anomalia PENDING igual (Deduplicação)
             check_sql = text("""
-                SELECT id, repeat_count FROM data_anomalies_log 
+                SELECT id, occurrences FROM data_anomalies_log 
                 WHERE target_table = :target_table 
                   AND symbol_or_event = :symbol_or_event 
                   AND anomaly_type = :anomaly_type 
@@ -86,24 +86,37 @@ def log_anomaly(target_table: str, symbol_or_event: str, raw_value: Any, expecte
             }).fetchone()
 
             if existing:
-                # Incrementar contador de repetições em vez de duplicar linhas
+                anomaly_id, occurrences = existing[0], existing[1] + 1
                 update_sql = text("""
                     UPDATE data_anomalies_log 
-                    SET repeat_count = repeat_count + 1, raw_value = :raw_value, anomaly_reason = :anomaly_reason
+                    SET occurrences = :occurrences, repeat_count = :occurrences, raw_value = :raw_value, 
+                        anomaly_reason = :anomaly_reason, last_seen = NOW()
                     WHERE id = :id
                 """)
                 conn.execute(update_sql, {
-                    "id": existing[0],
+                    "id": anomaly_id,
+                    "occurrences": occurrences,
                     "raw_value": str(raw_value),
                     "anomaly_reason": anomaly_reason
                 })
-                logging.info(f"🔄 Anomalia deduplicada para {symbol_or_event} (Contador: {existing[1] + 1})")
+                logging.info(f"🔄 Anomalia deduplicada para {symbol_or_event} (Ocorrências: {occurrences})")
+                
+                # Regra de Escalonamento Urgente (ESCALATION_THRESHOLD = 5)
+                if occurrences >= 5:
+                    urgent_msg = f"⚠️ PERSISTENTE: [{symbol_or_event}] falha há {occurrences} corridas consecutivas — requer intervenção manual na fonte, não só quarentena."
+                    logging.error(f"🚨 ALERTA URGENTE DE ESCALONAMENTO: {urgent_msg}")
+                    # Enviar notificação secundária urgente se conetor configurado
+                    try:
+                        from app.services.alert_service import send_alert_notification
+                        send_alert_notification(urgent_msg)
+                    except Exception:
+                        pass
             else:
-                # Inserir nova anomalia
+                # Inserir nova anomalia com occurrences = 1, first_seen = NOW(), last_seen = NOW()
                 insert_sql = text("""
                     INSERT INTO data_anomalies_log 
-                    (target_table, symbol_or_event, raw_value, expected_range, anomaly_type, anomaly_reason, status, repeat_count)
-                    VALUES (:target_table, :symbol_or_event, :raw_value, :expected_range, :anomaly_type, :anomaly_reason, 'PENDING', 1)
+                    (target_table, symbol_or_event, raw_value, expected_range, anomaly_type, anomaly_reason, status, occurrences, repeat_count, first_seen, last_seen)
+                    VALUES (:target_table, :symbol_or_event, :raw_value, :expected_range, :anomaly_type, :anomaly_reason, 'PENDING', 1, 1, NOW(), NOW())
                 """)
                 conn.execute(insert_sql, {
                     "target_table": target_table,

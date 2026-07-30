@@ -17,7 +17,7 @@ from app.services.liquidity_engine import (
     detect_swing_fractals,
     analyze_liquidity_sweeps
 )
-from app.services.vpvr_ondemand import calculate_vpvr
+from app.services.vpvr_ondemand import calculate_vpvr, UnsupportedAssetClassError
 
 class TestLiquidityEngine(unittest.TestCase):
 
@@ -43,10 +43,24 @@ class TestLiquidityEngine(unittest.TestCase):
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0]["status"], "ATR_60_INCOMPLETO")
 
-    def test_forex_vpvr_blocking(self):
-        """Verifica se o cálculo de VPVR é estritamente bloqueado para ativos Forex"""
-        vpvr_res = calculate_vpvr("EURUSD=X", self.df)
-        self.assertIsNone(vpvr_res)
+    def test_atr60_cold_start_no_signal_generated(self):
+        """
+        Reparo 2: Um ativo com menos de 60 sessões (ex: 45) não deve gerar
+        nenhum sinal de sweep, registando apenas status_atr60 = 'ATR_60_INCOMPLETO',
+        sweep_detected = False e threshold = None.
+        """
+        short_df = self.df.iloc[:45].copy()
+        res = analyze_liquidity_sweeps("TEST_TICKER", short_df)
+        self.assertEqual(len(res), 1)
+        single = res[0]
+        self.assertEqual(single["status_atr60"], "ATR_60_INCOMPLETO")
+        self.assertFalse(single["sweep_detected"])
+        self.assertIsNone(single.get("threshold"))
+
+    def test_forex_unsupported_asset_class_exception(self):
+        """Verifica se o cálculo de VPVR lança UnsupportedAssetClassError para ativos Forex"""
+        with self.assertRaises(UnsupportedAssetClassError):
+            calculate_vpvr("EURUSD=X", self.df)
 
     def test_vpvr_real_volume_asset(self):
         """Verifica se o cálculo de VPVR funciona normalmente para ativos com volume real (ex: Brent BZ=F)"""
@@ -58,6 +72,8 @@ class TestLiquidityEngine(unittest.TestCase):
     def test_swing_fractal_detection(self):
         """Verifica se a função detect_swing_fractals identifica topos e fundos fractais"""
         highs, lows = detect_swing_fractals(self.df, n=3)
+        self.assertIsInstance(highs, list)
+        self.assertIsInstance(lows, list)
         self.assertIsInstance(highs, list)
         self.assertIsInstance(lows, list)
 

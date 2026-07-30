@@ -17,6 +17,7 @@ from sqlalchemy import text
 from app.services.liquidity_engine import analyze_liquidity_sweeps
 from app.services.vpvr_ondemand import calculate_vpvr
 from app.services.alert_service import format_sweep_alert, send_alert_notification, check_quarantine_sla_violations
+from app.services.notion_sync_service import publish_liquidity_signal_to_notion
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -52,6 +53,10 @@ def run_liquidity_analysis_pipeline():
                 if sweep.get("status") == "LIQUIDEZ_CONSUMIDA":
                     alert_msg = format_sweep_alert(sweep)
                     send_alert_notification(alert_msg)
+                    
+                    # Publicar no Notion (Database 'Sinais de Liquidez')
+                    publish_liquidity_signal_to_notion(sweep)
+                    
                     alerts_triggered += 1
                     
                     # 2. Se o ativo tiver volume real (não Forex), calcular VPVR On-Demand

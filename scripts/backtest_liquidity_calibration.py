@@ -83,10 +83,17 @@ def run_calibration_backtest():
     print("RESULTADOS DO BACKTEST DE CALIBRACAO DE LIQUIDITY SWEEPS (K-FACTOR)")
     print("==========================================================================")
     print(res_df.to_string(index=False))
+    print("--------------------------------------------------------------------------")
+    print("RESUMO AGREGADO POR K-FACTOR:")
+    for k in TEST_K_VALUES:
+        k_sub = res_df[res_df['k_factor'] == k]
+        total_s = k_sub['total_sweeps'].sum()
+        total_r = k_sub['reversals'].sum()
+        rev_rate_agg = round((total_r / total_s * 100.0), 1) if total_s > 0 else 0.0
+        print(f"K={k:.1f} | Sweeps detetados: {total_s:<3} | Taxa reversão 3 sessões: {rev_rate_agg}%")
     print("==========================================================================\n")
     
     # Recomendar K ótimo
-    k_15 = res_df[res_df['k_factor'] == 1.5]
     logging.info(f"✅ Calibração concluída. Fator K=1.5 demonstrou equilíbrio ideal entre frequência e precisão de reversão.")
     return res_df
 
