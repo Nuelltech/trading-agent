@@ -23,7 +23,8 @@ FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 
 YFINANCE_MAP = {
     # Volatilidade
-    "^VIX": {"name": "VIX", "multiplier": 1.0},
+    "^VIX": {"name": "VIX", "multiplier": 1.0, "save_ticker": "^VIX"},
+    "^V2TX": {"name": "VSTOXX Euro Volatility", "multiplier": 1.0, "save_ticker": "VSTOXX"},
     
     # Obrigações EUA
     "^TNX": {"name": "US 10Y Yield", "multiplier": 1.0},
@@ -106,8 +107,9 @@ def fetch_yfinance_data():
                     high_val = max(high_val, open_val, close_val)
                     low_val = min(low_val, open_val, close_val)
 
+                save_symbol = info.get("save_ticker", ticker)
                 records.append({
-                    "symbol": ticker,
+                    "symbol": save_symbol,
                     "name": info["name"],
                     "timestamp": latest.name.strftime("%Y-%m-%d %H:%M:%S"),
                     "value": round(close_val, 6),

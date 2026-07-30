@@ -65,24 +65,54 @@ CENTRAL_BANK_EVENTS = [
 ]
 
 def log_anomaly(target_table: str, symbol_or_event: str, raw_value: Any, expected_range: str, anomaly_type: str, anomaly_reason: str):
-    """Grava um registo de anomalia na tabela de quarentena data_anomalies_log e emite warning no log"""
+    """Grava ou deduplica um registo de anomalia na quarentena data_anomalies_log com contador de repetições"""
     logging.warning(f"⚠️ QUARENTENA DATA QUALITY [{anomaly_type}] {symbol_or_event}: {anomaly_reason}")
     try:
         with engine.connect() as conn:
             trans = conn.begin()
-            sql = text("""
-                INSERT INTO data_anomalies_log 
-                (target_table, symbol_or_event, raw_value, expected_range, anomaly_type, anomaly_reason, status)
-                VALUES (:target_table, :symbol_or_event, :raw_value, :expected_range, :anomaly_type, :anomaly_reason, 'PENDING')
+            # 1. Verificar se já existe uma anomalia PENDING igual (Deduplicação)
+            check_sql = text("""
+                SELECT id, repeat_count FROM data_anomalies_log 
+                WHERE target_table = :target_table 
+                  AND symbol_or_event = :symbol_or_event 
+                  AND anomaly_type = :anomaly_type 
+                  AND status = 'PENDING'
+                LIMIT 1
             """)
-            conn.execute(sql, {
+            existing = conn.execute(check_sql, {
                 "target_table": target_table,
                 "symbol_or_event": symbol_or_event,
-                "raw_value": str(raw_value),
-                "expected_range": expected_range,
-                "anomaly_type": anomaly_type,
-                "anomaly_reason": anomaly_reason
-            })
+                "anomaly_type": anomaly_type
+            }).fetchone()
+
+            if existing:
+                # Incrementar contador de repetições em vez de duplicar linhas
+                update_sql = text("""
+                    UPDATE data_anomalies_log 
+                    SET repeat_count = repeat_count + 1, raw_value = :raw_value, anomaly_reason = :anomaly_reason
+                    WHERE id = :id
+                """)
+                conn.execute(update_sql, {
+                    "id": existing[0],
+                    "raw_value": str(raw_value),
+                    "anomaly_reason": anomaly_reason
+                })
+                logging.info(f"🔄 Anomalia deduplicada para {symbol_or_event} (Contador: {existing[1] + 1})")
+            else:
+                # Inserir nova anomalia
+                insert_sql = text("""
+                    INSERT INTO data_anomalies_log 
+                    (target_table, symbol_or_event, raw_value, expected_range, anomaly_type, anomaly_reason, status, repeat_count)
+                    VALUES (:target_table, :symbol_or_event, :raw_value, :expected_range, :anomaly_type, :anomaly_reason, 'PENDING', 1)
+                """)
+                conn.execute(insert_sql, {
+                    "target_table": target_table,
+                    "symbol_or_event": symbol_or_event,
+                    "raw_value": str(raw_value),
+                    "expected_range": expected_range,
+                    "anomaly_type": anomaly_type,
+                    "anomaly_reason": anomaly_reason
+                })
             trans.commit()
     except Exception as e:
         logging.error(f"Erro ao gravar na tabela data_anomalies_log: {e}")
