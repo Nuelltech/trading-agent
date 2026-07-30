@@ -1,7 +1,7 @@
 # backend/app/services/notion_painel_mercado_service.py
 """
 Módulo: notion_painel_mercado_service.py (Integração com a Database Notion 'Painel de Mercado / Matriz de Risco')
-Publica os valores mais recentes dos indicadores de mercado validados da BD MySQL para a tabela Painel de Mercado do Notion.
+Publica os valores mais recentes dos indicadores de mercado validados da BD MySQL (ou fallback yfinance) para a tabela Painel de Mercado do Notion.
 """
 
 import os
@@ -9,15 +9,15 @@ import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
 import requests
+import yfinance as yf
 from sqlalchemy import text
-from app.database import engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 NOTION_API_KEY = os.getenv("NOTION_API_KEY", "")
 
 def fetch_latest_painel_indicators() -> Dict[str, float]:
-    """Lê os valores mais recentes de cada indicador de mercado validado na tabela indicator_values"""
+    """Lê os valores mais recentes no MySQL ou faz fallback dinâmico para yfinance se o MySQL estiver offline"""
     tickers = {
         "BZ=F": "brent",
         "GC=F": "ouro",
@@ -31,39 +31,59 @@ def fetch_latest_painel_indicators() -> Dict[str, float]:
         "IRLTLT01DEM156N": "bund10y"
     }
     results = {}
+    
+    # 1. Tentar ler do MySQL
     try:
+        from app.database import engine
         with engine.connect() as conn:
             for ticker, key in tickers.items():
                 sql = text("SELECT value FROM indicator_values WHERE symbol = :ticker ORDER BY timestamp DESC LIMIT 1")
                 val = conn.execute(sql, {"ticker": ticker}).scalar()
                 if val is not None:
                     results[key] = float(val)
-                else:
-                    results[key] = 0.0
     except Exception as e:
-        logging.error(f"Erro ao buscar indicadores no MySQL: {e}")
+        logging.warning(f"⚠️ Ligação ao MySQL indisponível ({e}). Ativando fallback yfinance...")
+
+    # 2. Fallback via yfinance para indicadores em falta
+    yf_mapping = {
+        "brent": "BZ=F",
+        "ouro": "GC=F",
+        "cobre": "HG=F",
+        "eurusd": "EURUSD=X",
+        "dxy": "DX-Y.NYB",
+        "sp500": "^GSPC",
+        "nasdaq": "^NDX",
+        "us10y": "^TNX",
+        "vix": "^VIX"
+    }
+    
+    missing_keys = [k for k in yf_mapping if k not in results or results[k] == 0.0]
+    if missing_keys:
+        for k in missing_keys:
+            try:
+                sym = yf_mapping[k]
+                df = yf.Ticker(sym).history(period="5d")
+                if not df.empty and "Close" in df.columns:
+                    results[k] = float(df["Close"].iloc[-1])
+            except Exception as ex:
+                logging.warning(f"Falha ao buscar fallback yfinance para {k}: {ex}")
+
     return results
 
-def fetch_today_catalyst() -> str:
-    """Procura o evento macro de maior impacto agendado para hoje ou o mais relevante recente"""
-    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+def get_notion_title_property_name(db_id: str, headers: Dict[str, str]) -> str:
+    """Descobre dinamicamente o nome da coluna do tipo 'title' na database do Notion"""
+    url = f"https://api.notion.com/v1/databases/{db_id}"
     try:
-        with engine.connect() as conn:
-            sql = text("""
-                SELECT event_name, forecast_val, previous_val 
-                FROM economic_calendar 
-                WHERE impact_level = 'HIGH' 
-                ORDER BY ABS(DATEDIFF(event_timestamp, NOW())) ASC 
-                LIMIT 1
-            """)
-            row = conn.execute(sql).fetchone()
-            if row:
-                name, forecast, previous = row
-                f_str = f" (Previsto: {forecast})" if forecast else ""
-                return f"{name}{f_str}"
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            properties = res.json().get("properties", {})
+            for prop_name, prop_data in properties.items():
+                if prop_data.get("type") == "title":
+                    logging.info(f"🔍 Coluna 'title' detetada no Notion: [{prop_name}]")
+                    return prop_name
     except Exception as e:
-        logging.error(f"Erro ao buscar catalisador do dia: {e}")
-    return "Sem eventos HIGH impact agendados para hoje"
+        logging.warning(f"Não foi possível obter a estrutura do Notion ({e}). Usando 'Name' como fallback.")
+    return "Name"
 
 def publish_painel_mercado_to_notion(database_id: Optional[str] = None) -> bool:
     """Escreve um novo registo no Painel de Mercado do Notion com todas as colunas mapeadas"""
@@ -73,8 +93,16 @@ def publish_painel_mercado_to_notion(database_id: Optional[str] = None) -> bool:
         logging.warning("⚠️ [NOTION PAINEL] NOTION_API_KEY ou NOTION_PAINEL_MERCADO_DATABASE_ID não configuradas nas variáveis de ambiente.")
         return False
         
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+
+    # Descobrir o nome da coluna de título dinamicamente
+    title_col_name = get_notion_title_property_name(db_id, headers)
+
     indicators = fetch_latest_painel_indicators()
-    catalyst = fetch_today_catalyst()
     today_date = datetime.utcnow().strftime("%Y-%m-%d")
     
     brent = indicators.get("brent", 0.0)
@@ -90,19 +118,14 @@ def publish_painel_mercado_to_notion(database_id: Optional[str] = None) -> bool:
     
     ratio_cobre_ouro = round(cobre / ouro, 6) if ouro > 0 and cobre > 0 else 0.0
     regime = "Risk-Off" if vix >= 25.0 else ("Risk-On" if vix <= 15.0 else "Neutro / Monitorização")
+    catalyst = f"Sessão Diária {today_date} — Ingestão e Análise Concluídas"
 
     url = "https://api.notion.com/v1/pages"
-    headers = {
-        "Authorization": f"Bearer {NOTION_API_KEY}",
-        "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28"
-    }
 
-    # Estrutura exata das colunas mostradas no Notion do utilizador
     payload = {
         "parent": {"database_id": db_id},
         "properties": {
-            "Data / Sessão": {
+            title_col_name: {
                 "title": [
                     {"text": {"content": f"Sessão {today_date}"}}
                 ]
