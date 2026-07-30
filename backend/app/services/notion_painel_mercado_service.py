@@ -1,7 +1,8 @@
 # backend/app/services/notion_painel_mercado_service.py
 """
 Módulo: notion_painel_mercado_service.py (Integração com a Database Notion 'Painel de Mercado / Matriz de Risco')
-Publica os valores mais recentes dos indicadores de mercado validados da BD MySQL (ou fallback yfinance) para a tabela Painel de Mercado do Notion.
+Publica/Atualiza (UPSERT) os valores mais recentes dos indicadores de mercado validados para a tabela Painel de Mercado do Notion.
+Se a linha da Sessão de Hoje já existir, ATUALIZA em tempo real. Se for um novo dia, CRIA uma linha nova.
 """
 
 import os
@@ -85,8 +86,31 @@ def get_notion_title_property_name(db_id: str, headers: Dict[str, str]) -> str:
         logging.warning(f"Não foi possível obter a estrutura do Notion ({e}). Usando 'Name' como fallback.")
     return "Name"
 
+def find_existing_today_page_id(db_id: str, title_col_name: str, session_title: str, headers: Dict[str, str]) -> Optional[str]:
+    """Procura se já existe uma linha criada na database do Notion para a sessão de hoje"""
+    url = f"https://api.notion.com/v1/databases/{db_id}/query"
+    query_payload = {
+        "filter": {
+            "property": title_col_name,
+            "title": {
+                "equals": session_title
+            }
+        }
+    }
+    try:
+        res = requests.post(url, json=query_payload, headers=headers, timeout=10)
+        if res.status_code == 200:
+            results = res.json().get("results", [])
+            if results:
+                page_id = results[0].get("id")
+                logging.info(f"🔍 Encontrada linha existente para a sessão de hoje no Notion (ID: {page_id})")
+                return page_id
+    except Exception as e:
+        logging.warning(f"Falha ao consultar existência de linha no Notion: {e}")
+    return None
+
 def publish_painel_mercado_to_notion(database_id: Optional[str] = None) -> bool:
-    """Escreve um novo registo no Painel de Mercado do Notion com todas as colunas mapeadas"""
+    """Publica ou Atualiza (UPSERT) a linha da Sessão de Hoje no Painel de Mercado do Notion"""
     db_id = database_id or os.getenv("NOTION_PAINEL_MERCADO_DATABASE_ID", "") or os.getenv("NOTION_DATABASE_ID", "")
     
     if not NOTION_API_KEY or not db_id:
@@ -104,6 +128,7 @@ def publish_painel_mercado_to_notion(database_id: Optional[str] = None) -> bool:
 
     indicators = fetch_latest_painel_indicators()
     today_date = datetime.utcnow().strftime("%Y-%m-%d")
+    session_title = f"Sessão {today_date}"
     
     brent = indicators.get("brent", 0.0)
     ouro = indicators.get("ouro", 0.0)
@@ -120,39 +145,51 @@ def publish_painel_mercado_to_notion(database_id: Optional[str] = None) -> bool:
     regime = "Risk-Off" if vix >= 25.0 else ("Risk-On" if vix <= 15.0 else "Neutro / Monitorização")
     catalyst = f"Sessão Diária {today_date} — Ingestão e Análise Concluídas"
 
-    url = "https://api.notion.com/v1/pages"
-
-    payload = {
-        "parent": {"database_id": db_id},
-        "properties": {
-            title_col_name: {
-                "title": [
-                    {"text": {"content": f"Sessão {today_date}"}}
-                ]
-            },
-            "Brent": {"number": round(brent, 2)},
-            "Bund 10Y": {"number": round(bund10y, 3)},
-            "Catalisador do Dia": {
-                "rich_text": [
-                    {"text": {"content": catalyst}}
-                ]
-            },
-            "DXY": {"number": round(dxy, 2)},
-            "EUR/USD": {"number": round(eurusd, 4)},
-            "Nasdaq 100": {"number": round(nasdaq, 2)},
-            "Ouro": {"number": round(ouro, 2)},
-            "Regime": {"select": {"name": regime}},
-            "Rácio Cobre/Ouro": {"number": ratio_cobre_ouro},
-            "S&P 500": {"number": round(sp500, 2)},
-            "US 10Y": {"number": round(us10y, 3)},
-            "VIX": {"number": round(vix, 2)}
-        }
+    properties_payload = {
+        title_col_name: {
+            "title": [
+                {"text": {"content": session_title}}
+            ]
+        },
+        "Brent": {"number": round(brent, 2)},
+        "Bund 10Y": {"number": round(bund10y, 3)},
+        "Catalisador do Dia": {
+            "rich_text": [
+                {"text": {"content": catalyst}}
+            ]
+        },
+        "DXY": {"number": round(dxy, 2)},
+        "EUR/USD": {"number": round(eurusd, 4)},
+        "Nasdaq 100": {"number": round(nasdaq, 2)},
+        "Ouro": {"number": round(ouro, 2)},
+        "Regime": {"select": {"name": regime}},
+        "Rácio Cobre/Ouro": {"number": ratio_cobre_ouro},
+        "S&P 500": {"number": round(sp500, 2)},
+        "US 10Y": {"number": round(us10y, 3)},
+        "VIX": {"number": round(vix, 2)}
     }
 
+    # Verificar se a linha de hoje já existe para ATUALIZAR (PATCH) ou CRIAR (POST)
+    existing_page_id = find_existing_today_page_id(db_id, title_col_name, session_title, headers)
+
+    if existing_page_id:
+        url = f"https://api.notion.com/v1/pages/{existing_page_id}"
+        payload = {"properties": properties_payload}
+        action_verb = "atualizada"
+        http_method = requests.patch
+    else:
+        url = "https://api.notion.com/v1/pages"
+        payload = {
+            "parent": {"database_id": db_id},
+            "properties": properties_payload
+        }
+        action_verb = "criada"
+        http_method = requests.post
+
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=10)
+        res = http_method(url, json=payload, headers=headers, timeout=10)
         if res.status_code in [200, 201]:
-            logging.info(f"✅ [NOTION PAINEL] Registo publicado com sucesso no Painel de Mercado do Notion para {today_date}!")
+            logging.info(f"✅ [NOTION PAINEL] Linha da [{session_title}] {action_verb} com sucesso no Notion!")
             return True
         else:
             logging.error(f"❌ [NOTION PAINEL] Erro na API do Notion ({res.status_code}): {res.text}")
