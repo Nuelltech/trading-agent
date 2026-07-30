@@ -445,7 +445,7 @@ def phase4_inject_notion_initial(packages: List[Dict[str, Any]], radar_48h: str)
         query_payload = {
             "filter": {
                 "and": [
-                    {"property": title_col, "title": {"equals": ticker}},
+                    {"property": title_col, "title": {"contains": ticker}},
                     {"property": date_col, "date": {"equals": today_date}}
                 ]
             }
