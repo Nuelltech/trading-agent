@@ -1,45 +1,46 @@
-# KNOWN ISSUES & API PECULIARITIES
+# KNOWN ISSUES & PECULIARIDADES DE APIS
+**Especificação Técnica v1.0 — Secção 8**
 
-Documento de registo de peculiaridades, anomalias de formato e limitações conhecidas das APIs de ingestão de dados financeiros e macroeconómicos do Trading Agent.
+Documento oficial de registo de limitações conhecidas, comportamentos anómalos de fontes de dados e convenções de calibração do Trading Agent.
 
 ---
 
 ## 1. Yahoo Finance (`yfinance`)
 
-### A. Tickers de Sovereign Yields (`^TNX`, `^TYX`, `^IRX`)
-* **Problema**: O Yahoo Finance altera ocasionalmente a escala de saída das taxas de juro soberanas entre atualizações de versão sem aviso prévio. Em certas versões devolve a taxa multiplicada por 10 (ex: `46.37` para 4.637%), noutras devolve a taxa em % direto (ex: `4.637`).
-* **Mitigação**: O `data_validator.py` impõe um intervalo rígido de plausibilidade (`[0.5, 10.0]`). Se um valor for recebido como `0.4637` ou `46.37`, a rotina ajusta a escala ou envia o registo para a tabela `data_anomalies_log`.
-
-### B. Contratos Futuros de Commodities (`GC=F`, `CL=F`, `BZ=F`)
-* **Problema**: As velas diárias (EOD) da Yahoo Finance para futuros juntam o preço de abertura da sessão *Globex* (pré-mercado noturno) com os máximos/mínimos da sessão regular de negociação (RTH). Isso pode fazer com que o `open_val` pareça fora do intervalo `[low_val, high_val]`.
-* **Mitigação**: O `data_validator.py` executa a sanitização matemática rígida:
-  - `high_val = max(high_val, open_val, close_val)`
-  - `low_val = min(low_val, open_val, close_val)`
+- **`^TNX` / `^TYX` (Sovereign Yields)**: Histórico de mudança repentina de formato de yield sem aviso prévio (confirmados 2 formatos diferentes na mesma semana: % direto vs. base 100). Validar sempre contra `PLAUSIBILITY_LIMITS` (`[0.5, 10.0]`) antes de gravar em produção.
+- **Futuros de Commodities (`GC=F`, `CL=F`, `BZ=F`)**: Podem misturar a sessão *Globex* (noturna/pre-market) e a sessão *RTH* (regular) no OHLC diário, causando `open ≈ low/high` aparentemente estranhos — nem sempre é erro, mas deve ser sanitizado matematicamente (`low <= min(open, close)` / `high >= max(open, close)`).
 
 ---
 
-## 2. Federal Reserve & Economic Data (FRED / FMP API)
+## 2. Yields Soberanas sem Ticker Yahoo Fiável
 
-### A. CME FedWatch Tool & Futures de Fed Funds
-* **Problema**: O CME FedWatch Tool não disponibiliza uma API REST pública e gratuita.
-* **Mitigação**: Os *forecasts* de decisões do FOMC em datas futuras são calculados via curva de contratos futuros de *Fed Funds* (`FF=F`) ou atualizados via calendários institucionais verificados (`FED_OFFICIAL`), evitando dependência de mocks genéricos.
-
-### B. Gestão de Ingestões em Fallback / Contingência
-* **Problema**: Fallbacks silenciosos com dados mockados genéricos mascaram a ausência de conectividade.
-* **Mitigação**: É expressamente proibido usar `SYSTEM_FEED` genérico em dados simulados. Todos os dados de contingência são etiquetados obrigatoriamente como `MOCK_DATA_FALLBACK` ou com fontes oficiais reais verificadas (`FED_OFFICIAL`, `BLS_OFFICIAL`, `ECB_OFFICIAL`).
+- **Bund 10Y (Alemanha) / JGB 10Y (Japão)**: Ausência de ticker diário `yfinance` 100% fiável. 
+- **Fonte Alternativa**: Ingestão via FRED API (`IRLTLT01DEM156N` e `IRLTLT01JPM156N`) ou Trading Economics API (free tier) / atualização de segurança.
 
 ---
 
-## 3. Data Quality Engine & Pipeline Rules
+## 3. Federal Reserve & CME FedWatch Tool
 
-1. **Limiares Adaptativos por Classe de Ativo**:
-   - `^VIX`: Max variation threshold = 35%
-   - `BZ=F` / `CL=F`: Max variation threshold = 12%
-   - `^TNX`: Max variation threshold = 8%
-   - `DX-Y.NYB`: Max variation threshold = 3%
-   - `EURUSD=X` / `GBPUSD=X`: Max variation threshold = 2.5%
-   - Stock / ETF Default: Max variation threshold = 15%
+- **CME FedWatch**: Sem API REST pública gratuita. O *forecast* de decisões futuras do FOMC deve ser tratado como estimativa derivada da curva de futuros de *Fed Funds* (`FF=F`), não como dado direto de mercado em tempo real, até ser obtida fonte alternativa.
 
-2. **Regra de Clusters de Calendário**:
-   - Nenhum par de bancos centrais (`Fed`, `BCE`, `BoE`, `BoJ`, `PBoC`) pode coincidir na mesma data.
-   - Máximo de 3 eventos de impacto `HIGH` por dia.
+---
+
+## 4. Categoria Forex (`EURUSD=X`, `USDJPY=X`, `GBPUSD=X`, etc.)
+
+- **Ausência de Volume Real**: Tickers de Forex em mercado *OTC* possuem volume sempre 0 ou apenas *tick volume* não consolidado.
+- **Regra Rígida**: Nunca usar ativos Forex para o cálculo de Volume Profile (VPVR). O `vpvr_ondemand.py` bloqueia expressamente esta categoria (`if asset_class == "FOREX": skip_vpvr()`).
+- **Futuro**: Caso seja estritamente necessário volume real centralizado para o Euro, migrar para contratos futuros da CME (`6E=F`).
+
+---
+
+## 5. Parâmetro de Sensibilidade de Sweeps ($K$)
+
+- **$K = 1.5$** (Valor final calibrado no Backtest da Secção 5 em 30/07/2026).
+- Calibração válida para **Brent (`BZ=F`)**, **Ouro (`GC=F`)**, **EUR/USD (`EURUSD=X`)** e **S&P 500 (`^GSPC`)**.
+- **Regra de Recalibração**: Recalibrar obrigatoriamente se forem adicionados novos ativos com perfis de volatilidade substancialmente diferentes.
+
+---
+
+## 6. Fronteira Não-Negociável
+
+- O sistema **NUNCA** executa ordens de forma autónoma. O output máximo é um alerta analítico humano. Toda a decisão de entrada passa obrigatoriamente pelo **Briefing Pré-Trade** antes de qualquer execução.
