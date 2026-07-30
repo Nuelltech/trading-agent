@@ -45,7 +45,9 @@ def get_notion_db_schema_properties(db_id: str) -> Dict[str, str]:
         res = requests.get(url, headers=NOTION_HEADERS, timeout=10)
         if res.status_code == 200:
             properties = res.json().get("properties", {})
-            return {p_name: p_data.get("type") for p_name, p_data in properties.items()}
+            schema = {p_name: p_data.get("type") for p_name, p_data in properties.items()}
+            logging.info(f"🔍 Schema detetado para Gemini db [{db_id}]: {schema}")
+            return schema
     except Exception as e:
         logging.warning(f"Falha ao ler propriedades da db {db_id}: {e}")
     return {}
@@ -89,7 +91,7 @@ def phase1_extract_vigilance_config() -> List[Dict[str, Any]]:
             if vigiado_val not in ["Gemini", "Ambos"]:
                 continue
 
-            ticker_title_list = props.get("Ticker", {}).get("title", []) or props.get("Name", {}).get("title", [])
+            ticker_title_list = props.get("Ticker", {}).get("title", []) or props.get("Name", {}).get("title", []) or props.get("Ativo", {}).get("title", [])
             ticker = ticker_title_list[0].get("text", {}).get("content", "") if ticker_title_list else ""
 
             nome_rt_list = props.get("Nome", {}).get("rich_text", [])
@@ -98,11 +100,12 @@ def phase1_extract_vigilance_config() -> List[Dict[str, Any]]:
             cat_select = props.get("Categoria", {}).get("select", {})
             categoria = cat_select.get("name", "Operável") if cat_select else "Operável"
 
-            filtered_items.append({
-                "ticker": ticker,
-                "nome": nome,
-                "categoria": categoria
-            })
+            if ticker:
+                filtered_items.append({
+                    "ticker": ticker,
+                    "nome": nome,
+                    "categoria": categoria
+                })
 
         logging.info(f"✅ [FASE 1] {len(filtered_items)} ativos lidos da Configuração de Vigilância para o Gemini.")
         return filtered_items
@@ -169,7 +172,7 @@ def compute_pandas_enrichment_metrics(df: pd.DataFrame) -> Dict[str, Any]:
         "amplitude_vs_atr": "1.0x"
     }
 
-    if df.empty or len(df) < 5:
+    if df.empty or len(df) < 2:
         return metrics
 
     close = df["close"]
@@ -224,13 +227,12 @@ def get_radar_eventos_48h() -> str:
         from app.database import engine
         with engine.connect() as conn:
             sql = text("""
-                SELECT title, country, event_time 
+                SELECT event_name, country, event_timestamp 
                 FROM economic_calendar 
-                WHERE impact IN ('HIGH', '3')
-                  AND country IN ('US', 'EU', 'DE')
-                  AND event_time >= NOW() 
-                  AND event_time <= DATE_ADD(NOW(), INTERVAL 48 HOUR)
-                ORDER BY event_time ASC
+                WHERE impact_level IN ('HIGH', 'MEDIUM')
+                  AND event_timestamp >= NOW() 
+                  AND event_timestamp <= DATE_ADD(NOW(), INTERVAL 48 HOUR)
+                ORDER BY event_timestamp ASC
                 LIMIT 5
             """)
             rows = conn.execute(sql).fetchall()
@@ -253,7 +255,19 @@ def phase3_query_market_data(macro_list: List[Dict[str, Any]], operavel_list: Li
     operavel_packages = []
     radar_48h = get_radar_eventos_48h()
 
-    # Processar cada ativo operável
+    # Pre-fetch Macro Indicators (VIX, US10Y, US02Y)
+    df_vix = extract_50_sessions_dataframe("^VIX")
+    metrics_vix = compute_pandas_enrichment_metrics(df_vix) if not df_vix.empty else {}
+    vix_close = float(df_vix.iloc[-1]["close"]) if not df_vix.empty else 0.0
+
+    df_tnx = extract_50_sessions_dataframe("^TNX")
+    tnx_close = float(df_tnx.iloc[-1]["close"]) if not df_tnx.empty else 0.0
+
+    df_dgs2 = extract_50_sessions_dataframe("DGS2")
+    dgs2_close = float(df_dgs2.iloc[-1]["close"]) if not df_dgs2.empty else 0.0
+
+    spread_10y_2y = tnx_close - dgs2_close
+
     for item in operavel_list:
         ticker = item["ticker"]
         nome = item["nome"]
@@ -264,17 +278,6 @@ def phase3_query_market_data(macro_list: List[Dict[str, Any]], operavel_list: Li
 
         metrics = compute_pandas_enrichment_metrics(df)
         last_row = df.iloc[-1]
-
-        # Extrair fecho do VIX e Yields 10Y/2Y
-        df_vix = extract_50_sessions_dataframe("^VIX")
-        metrics_vix = compute_pandas_enrichment_metrics(df_vix) if not df_vix.empty else {}
-        
-        df_tnx = extract_50_sessions_dataframe("^TNX")
-        df_dgs2 = extract_50_sessions_dataframe("DGS2")
-        
-        tnx_close = df_tnx.iloc[-1]["close"] if not df_tnx.empty else 0.0
-        dgs2_close = df_dgs2.iloc[-1]["close"] if not df_dgs2.empty else 0.0
-        spread_10y_2y = tnx_close - dgs2_close
 
         package = {
             "ticker": ticker,
@@ -297,8 +300,10 @@ def phase3_query_market_data(macro_list: List[Dict[str, Any]], operavel_list: Li
                 "Amplitude_vs_ATR": metrics["amplitude_vs_atr"]
             },
             "Stress_Macro": {
-                "VIX_Close": float(df_vix.iloc[-1]["close"]) if not df_vix.empty else 0.0,
+                "VIX_Close": vix_close,
                 "VIX_Variacao_5D_Pct": round(metrics_vix.get("variacao_5d", 0.0) * 100, 2),
+                "TNX_Close": tnx_close,
+                "DGS2_Close": dgs2_close,
                 "Spread_10Y_2Y": round(spread_10y_2y, 3)
             },
             "Calendario_Choque": {
@@ -310,9 +315,105 @@ def phase3_query_market_data(macro_list: List[Dict[str, Any]], operavel_list: Li
     logging.info(f"✅ [FASE 3] {len(operavel_packages)} pacotes quantitativos enriquecidos com Pandas construídos.")
     return {"packages": operavel_packages, "radar_48h": radar_48h}
 
+def map_pkg_to_notion_props(pkg: Dict[str, Any], radar_48h: str, db_schema: Dict[str, str], title_col: str, today_date: str, status_str: str = "[Em processamento]") -> Dict[str, Any]:
+    """Mapeia dinamicamente o pacote quantitativo para o dicionário de propriedades do Notion"""
+    props = {
+        title_col: {"title": [{"text": {"content": pkg["ticker"]}}]}
+    }
+
+    # Data
+    for date_key in ["Data", "Date"]:
+        if date_key in db_schema:
+            props[date_key] = {"date": {"start": today_date}}
+            break
+
+    # Nome (rich_text ou select)
+    for name_key in ["Nome", "Name"]:
+        if name_key in db_schema:
+            p_type = db_schema[name_key]
+            if p_type == "select":
+                props[name_key] = {"select": {"name": pkg["nome"]}}
+            else:
+                props[name_key] = {"rich_text": [{"text": {"content": pkg["nome"]}}]}
+            break
+
+    # Preço / Close
+    for close_key in ["Nível de Preço", "Preço Fecho", "Close", "Preço"]:
+        if close_key in db_schema:
+            props[close_key] = {"number": round(pkg["Acao_Preco_Diaria"]["Close"], 4)}
+            break
+
+    # Eventos 48h
+    for ev_key in ["Eventos 48h", "Radar Eventos", "Eventos"]:
+        if ev_key in db_schema:
+            props[ev_key] = {"rich_text": [{"text": {"content": radar_48h}}]}
+            break
+
+    # US02Y
+    for u2_key in ["US02Y", "US 2Y", "DGS2"]:
+        if u2_key in db_schema:
+            props[u2_key] = {"number": round(pkg["Stress_Macro"].get("DGS2_Close", 4.31), 4)}
+            break
+
+    # US10Y
+    for u10_key in ["US10Y", "US 10Y", "TNX"]:
+        if u10_key in db_schema:
+            props[u10_key] = {"number": round(pkg["Stress_Macro"].get("TNX_Close", 4.68), 4)}
+            break
+
+    # VIX
+    for vix_key in ["VIX Fecho", "VIX"]:
+        if vix_key in db_schema:
+            props[vix_key] = {"number": round(pkg["Stress_Macro"]["VIX_Close"], 4)}
+            break
+
+    # Spread 10Y-2Y
+    for sp_key in ["Spread 10Y-2Y", "Spread 10Y-2Y Yield"]:
+        if sp_key in db_schema:
+            props[sp_key] = {"number": round(pkg["Stress_Macro"]["Spread_10Y_2Y"], 4)}
+            break
+
+    # Z-Score 20D
+    for z_key in ["Z-Score 20D", "Z-Score"]:
+        if z_key in db_schema:
+            p_type = db_schema[z_key]
+            z_val = pkg["Regime_Matematico"]["Z_Score_20D"]
+            if p_type == "number":
+                props[z_key] = {"number": round(z_val, 2)}
+            else:
+                props[z_key] = {"rich_text": [{"text": {"content": str(z_val)}}]}
+            break
+
+    # Multiplicador ATR
+    for atr_key in ["Multiplicador ATR", "ATR Multiplicador"]:
+        if atr_key in db_schema:
+            p_type = db_schema[atr_key]
+            mult_val = pkg["Regime_Matematico"]["Amplitude_vs_ATR"]
+            if p_type == "rich_text":
+                props[atr_key] = {"rich_text": [{"text": {"content": mult_val}}]}
+            elif p_type == "number":
+                try:
+                    num_mult = float(mult_val.replace("x", ""))
+                    props[atr_key] = {"number": round(num_mult, 2)}
+                except:
+                    pass
+            break
+
+    # Status (select)
+    if "Status" in db_schema:
+        props["Status"] = {"select": {"name": status_str}}
+
+    # Veredito Tático (rich_text) - Inicialmente [Em processamento] se a coluna Status não existir
+    for ver_key in ["Veredito Tático", "Veredito"]:
+        if ver_key in db_schema and "Status" not in db_schema:
+            props[ver_key] = {"rich_text": [{"text": {"content": status_str}}]}
+            break
+
+    return props
+
 def phase4_inject_notion_initial(packages: List[Dict[str, Any]], radar_48h: str) -> List[Dict[str, Any]]:
     """
-    Fase 4: Escreve/Atualiza as linhas no Notion com status [Em processamento] e Eventos 48h.
+    Fase 4: Escreve/Atualiza as linhas no Notion com todas as colunas quantitativas + estado [Em processamento].
     """
     if not NOTION_TOKEN or not NOTION_GEMINI_DB_ID:
         logging.error("❌ NOTION_GEMINI_DB_ID não configurado.")
@@ -327,8 +428,6 @@ def phase4_inject_notion_initial(packages: List[Dict[str, Any]], radar_48h: str)
 
     for pkg in packages:
         ticker = pkg["ticker"]
-        nome = pkg["nome"]
-        close_val = pkg["Acao_Preco_Diaria"]["Close"]
 
         query_payload = {
             "filter": {
@@ -343,24 +442,17 @@ def phase4_inject_notion_initial(packages: List[Dict[str, Any]], radar_48h: str)
             res = requests.post(url_query, headers=NOTION_HEADERS, json=query_payload, timeout=10)
             existing = res.json().get("results", []) if res.status_code == 200 else []
 
-            props = {
-                title_col: {"title": [{"text": {"content": ticker}}]},
-                "Data": {"date": {"start": today_date}},
-                "Close": {"number": round(close_val, 4)},
-                "Status": {"select": {"name": "Em processamento"}}
-            }
-
-            if "Nome" in db_schema:
-                props["Nome"] = {"rich_text": [{"text": {"content": nome}}]}
-            if "Eventos 48h" in db_schema:
-                props["Eventos 48h"] = {"rich_text": [{"text": {"content": radar_48h}}]}
+            props = map_pkg_to_notion_props(pkg, radar_48h, db_schema, title_col, today_date, "[Em processamento]")
 
             if existing:
                 page_id = existing[0]["id"]
                 url_patch = f"https://api.notion.com/v1/pages/{page_id}"
                 patch_res = requests.patch(url_patch, headers=NOTION_HEADERS, json={"properties": props}, timeout=10)
-                pkg["notion_page_id"] = page_id
-                logging.info(f"✅ [FASE 4] [{ticker}] atualizado no Notion para [Em processamento]")
+                if patch_res.status_code in [200, 201]:
+                    pkg["notion_page_id"] = page_id
+                    logging.info(f"✅ [FASE 4] [{ticker}] atualizado no Notion com métricas quantitativas ([Em processamento])")
+                else:
+                    logging.error(f"❌ [FASE 4] PATCH falhou para [{ticker}] ({patch_res.status_code}): {patch_res.text}")
             else:
                 post_payload = {
                     "parent": {"database_id": NOTION_GEMINI_DB_ID},
@@ -371,7 +463,9 @@ def phase4_inject_notion_initial(packages: List[Dict[str, Any]], radar_48h: str)
                 if post_res.status_code in [200, 201]:
                     page_id = post_res.json().get("id")
                     pkg["notion_page_id"] = page_id
-                    logging.info(f"✅ [FASE 4] Linha criada para [{ticker}] no Notion ([Em processamento])")
+                    logging.info(f"✅ [FASE 4] Linha criada para [{ticker}] no Notion com métricas quantitativas ([Em processamento])")
+                else:
+                    logging.error(f"❌ [FASE 4] POST falhou para [{ticker}] ({post_res.status_code}): {post_res.text}")
 
             updated_packages.append(pkg)
         except Exception as e:
@@ -383,7 +477,7 @@ def phase4_inject_notion_initial(packages: List[Dict[str, Any]], radar_48h: str)
 def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
     """
     Fase 5: Invoca o modelo Google Gemini com o payload quantitativo estruturado.
-    Atualiza o Notion com o Veredito, Viés e Status [Concluído].
+    Substitui '[Em processamento]' pelo Veredito Tático real, Viés e Status [Concluído].
     """
     if not GEMINI_API_KEY:
         logging.warning("⚠️ GEMINI_API_KEY não encontrada. Invocação ao modelo ignorada.")
@@ -402,6 +496,7 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
     for pkg in packages:
         page_id = pkg.get("notion_page_id")
         if not page_id:
+            logging.warning(f"⚠️ [{pkg['ticker']}] sem notion_page_id. Invocação do Gemini ignorada para este item.")
             continue
 
         prompt = f"""
@@ -409,14 +504,14 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
         
         {pkg}
 
-        Forneça:
-        1. Veredito Tático (máximo 3 frases diretas sobre momentum, risco extremo Z-score e catalisadores).
-        2. Viés (escolha exatamente um: 'Bullish', 'Bearish', ou 'Neutro').
+        Forneça uma resposta direta com:
+        1. Veredito Tático (máximo 3 frases conclusivas focando no momentum, Z-score e catalisadores).
+        2. Viés (escolha exatamente uma palavra: 'Bullish', 'Bearish', ou 'Neutro').
         """
 
         try:
             response = model.generate_content(prompt)
-            verdict_text = response.text.strip() if response and response.text else "Análise concluída."
+            verdict_text = response.text.strip() if response and response.text else "Análise quantitativa concluída com sucesso."
             
             vies = "Neutro"
             if "bullish" in verdict_text.lower():
@@ -424,21 +519,25 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
             elif "bearish" in verdict_text.lower():
                 vies = "Bearish"
 
-            props = {
-                "Status": {"select": {"name": "Concluído"}}
-            }
+            props = {}
 
-            if "Veredito Tático" in db_schema or "Veredito" in db_schema:
-                v_col = "Veredito Tático" if "Veredito Tático" in db_schema else "Veredito"
-                props[v_col] = {"rich_text": [{"text": {"content": verdict_text[:2000]}}]}
+            if "Status" in db_schema:
+                props["Status"] = {"select": {"name": "Concluído"}}
 
-            if "Viés" in db_schema:
-                props["Viés"] = {"select": {"name": vies}}
+            for ver_key in ["Veredito Tático", "Veredito"]:
+                if ver_key in db_schema:
+                    props[ver_key] = {"rich_text": [{"text": {"content": verdict_text[:2000]}}]}
+                    break
+
+            for vies_key in ["Viés", "Bias"]:
+                if vies_key in db_schema:
+                    props[vies_key] = {"select": {"name": vies}}
+                    break
 
             url_patch = f"https://api.notion.com/v1/pages/{page_id}"
             patch_res = requests.patch(url_patch, headers=NOTION_HEADERS, json={"properties": props}, timeout=10)
             if patch_res.status_code in [200, 201]:
-                logging.info(f"🎉 [FASE 5] [{pkg['ticker']}] Veredito Gemini gravado no Notion com sucesso (Status [Concluído])!")
+                logging.info(f"🎉 [FASE 5] [{pkg['ticker']}] Veredito Gemini gravado no Notion com sucesso!")
             else:
                 logging.error(f"❌ Erro ao gravar veredito Gemini no Notion para [{pkg['ticker']}] ({patch_res.status_code}): {patch_res.text}")
 
@@ -466,10 +565,10 @@ def run_gemini_trader_pipeline():
         logging.warning("⚠️ Nenhum pacote operável construído na Fase 3.")
         return
 
-    # Fase 4 (Notion Initial Status)
+    # Fase 4 (Notion Initial Status & Quantitative Data Injection)
     updated_packages = phase4_inject_notion_initial(packages, radar_48h)
 
-    # Fase 5 (Gemini AI Inference)
+    # Fase 5 (Gemini AI Inference & Verdict Update)
     phase5_invoke_gemini_and_update(updated_packages)
 
     logging.info("🎉 Pipeline Gemini Trader concluído com sucesso!")
