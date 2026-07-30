@@ -321,8 +321,8 @@ def map_pkg_to_notion_props(pkg: Dict[str, Any], radar_48h: str, db_schema: Dict
         title_col: {"title": [{"text": {"content": pkg["ticker"]}}]}
     }
 
-    # Data
-    for date_key in ["Data", "Date"]:
+    # Data da Sessão (date)
+    for date_key in ["Data da Sessão", "Data", "Date"]:
         if date_key in db_schema:
             props[date_key] = {"date": {"start": today_date}}
             break
@@ -337,8 +337,20 @@ def map_pkg_to_notion_props(pkg: Dict[str, Any], radar_48h: str, db_schema: Dict
                 props[name_key] = {"rich_text": [{"text": {"content": pkg["nome"]}}]}
             break
 
-    # Preço / Close
-    for close_key in ["Nível de Preço", "Preço Fecho", "Close", "Preço"]:
+    # Abertura / High / Low / Close
+    for open_key in ["Abertura", "Open"]:
+        if open_key in db_schema:
+            props[open_key] = {"number": round(pkg["Acao_Preco_Diaria"]["Open"], 4)}
+            break
+    for high_key in ["Máximo", "High"]:
+        if high_key in db_schema:
+            props[high_key] = {"number": round(pkg["Acao_Preco_Diaria"]["High"], 4)}
+            break
+    for low_key in ["Mínimo", "Low"]:
+        if low_key in db_schema:
+            props[low_key] = {"number": round(pkg["Acao_Preco_Diaria"]["Low"], 4)}
+            break
+    for close_key in ["Fecho", "Nível de Preço", "Preço Fecho", "Close", "Preço"]:
         if close_key in db_schema:
             props[close_key] = {"number": round(pkg["Acao_Preco_Diaria"]["Close"], 4)}
             break
@@ -362,7 +374,7 @@ def map_pkg_to_notion_props(pkg: Dict[str, Any], radar_48h: str, db_schema: Dict
             break
 
     # VIX
-    for vix_key in ["VIX Fecho", "VIX"]:
+    for vix_key in ["VIX", "VIX Fecho"]:
         if vix_key in db_schema:
             props[vix_key] = {"number": round(pkg["Stress_Macro"]["VIX_Close"], 4)}
             break
@@ -403,7 +415,7 @@ def map_pkg_to_notion_props(pkg: Dict[str, Any], radar_48h: str, db_schema: Dict
     if "Status" in db_schema:
         props["Status"] = {"select": {"name": status_str}}
 
-    # Veredito Tático (rich_text) - Inicialmente [Em processamento] se a coluna Status não existir
+    # Veredito Tático (rich_text) - Inicialmente [Em processamento]
     for ver_key in ["Veredito Tático", "Veredito"]:
         if ver_key in db_schema and "Status" not in db_schema:
             props[ver_key] = {"rich_text": [{"text": {"content": status_str}}]}
@@ -493,7 +505,7 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
         for model_name in ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro-latest", "gemini-1.5-pro"]:
             try:
                 model = genai.GenerativeModel(model_name)
-                logging.info(f"🤖 Modelo Gemini inicializado com sucesso: [{model_name}]")
+                logging.info(f"🤖 [FASE 5] SDK Gemini ativado com o modelo: [{model_name}]")
                 break
             except Exception:
                 continue
@@ -512,6 +524,8 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
             logging.warning(f"⚠️ [{pkg['ticker']}] sem notion_page_id. Invocação do Gemini ignorada para este item.")
             continue
 
+        logging.info(f"🤖 [FASE 5 AUDIT] A iniciar chamada à API do Gemini para o ativo [{pkg['ticker']}] ({pkg['nome']})...")
+
         prompt = f"""
         Você é um Analista Quantitativo e Trader Sénior. Analise o seguinte pacote de dados estruturados para o ativo {pkg['nome']} ({pkg['ticker']}):
         
@@ -525,7 +539,8 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
         try:
             response = model.generate_content(prompt)
             verdict_text = response.text.strip() if response and response.text else "Análise quantitativa concluída com sucesso."
-            
+            logging.info(f"✨ [FASE 5 AUDIT] Resposta do Gemini recebida para [{pkg['ticker']}] ({len(verdict_text)} caracteres).")
+
             vies = "Neutro"
             if "bullish" in verdict_text.lower():
                 vies = "Bullish"
@@ -548,14 +563,16 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
                     break
 
             url_patch = f"https://api.notion.com/v1/pages/{page_id}"
+            logging.info(f"📤 [FASE 5 AUDIT] Enviando PATCH ao Notion para substituir '[Em processamento]' na página ID [{page_id}]...")
+            
             patch_res = requests.patch(url_patch, headers=NOTION_HEADERS, json={"properties": props}, timeout=10)
             if patch_res.status_code in [200, 201]:
-                logging.info(f"🎉 [FASE 5] [{pkg['ticker']}] Veredito Gemini gravado no Notion com sucesso!")
+                logging.info(f"🎉 [FASE 5 AUDIT] Notion PATCH bem-sucedido (HTTP {patch_res.status_code}) para [{pkg['ticker']}]. '[Em processamento]' substituído com sucesso!")
             else:
-                logging.error(f"❌ Erro ao gravar veredito Gemini no Notion para [{pkg['ticker']}] ({patch_res.status_code}): {patch_res.text}")
+                logging.error(f"❌ [FASE 5 AUDIT] Erro ao gravar veredito Gemini no Notion para [{pkg['ticker']}] (HTTP {patch_res.status_code}): {patch_res.text}")
 
         except Exception as ex:
-            logging.error(f"❌ Falha ao invocar Gemini para [{pkg['ticker']}]: {ex}")
+            logging.error(f"❌ [FASE 5 AUDIT] Falha de execução/API Gemini para [{pkg['ticker']}]: {ex}")
 
 def run_gemini_trader_pipeline():
     """Pipeline Principal do Gemini Trader (Fases 1 a 5)"""
