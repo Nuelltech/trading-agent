@@ -208,37 +208,29 @@ def save_records_to_db(records):
                     quarantined_count += 1
                     continue
                     
-                indicator_id = catalog_map.get(sanitized_rec["symbol"])
-                if not indicator_id:
-                    logging.warning(f"Ticker {sanitized_rec['symbol']} não encontrado no catálogo.")
+            from app.services.data_validator import promover_para_producao
+            
+            for rec in records:
+                is_valid, sanitized_rec, err_msg = validate_ohlc_record(rec)
+                if not is_valid:
+                    quarantined_count += 1
                     continue
                     
-                sql_prod = text("""
-                    INSERT INTO indicator_values 
-                    (indicator_id, symbol, timestamp, value, open_val, high_val, low_val, volume)
-                    VALUES (:indicator_id, :symbol, :timestamp, :value, :open_val, :high_val, :low_val, :volume)
-                    ON DUPLICATE KEY UPDATE 
-                        value = VALUES(value),
-                        open_val = VALUES(open_val),
-                        high_val = VALUES(high_val),
-                        low_val = VALUES(low_val),
-                        volume = VALUES(volume);
-                """)
-                
-                conn.execute(sql_prod, {
-                    "indicator_id": indicator_id,
-                    "symbol": sanitized_rec["symbol"],
-                    "timestamp": sanitized_rec["timestamp"],
-                    "value": sanitized_rec["value"],
-                    "open_val": sanitized_rec["open_val"],
-                    "high_val": sanitized_rec["high_val"],
-                    "low_val": sanitized_rec["low_val"],
-                    "volume": sanitized_rec["volume"]
-                })
-                saved_count += 1
-                
-            trans.commit()
-            logging.info(f"🎉 Data Quality Concluído: {saved_count} cotações salvas em 'indicator_values' | {quarantined_count} em quarentena.")
+                res = promover_para_producao(
+                    ticker=sanitized_rec["symbol"],
+                    data=sanitized_rec["timestamp"],
+                    novo_open=sanitized_rec["open_val"],
+                    novo_high=sanitized_rec["high_val"],
+                    novo_low=sanitized_rec["low_val"],
+                    novo_close=sanitized_rec["value"],
+                    volume=sanitized_rec.get("volume", 0)
+                )
+                if res.get("status") in ["inserted", "updated"]:
+                    saved_count += 1
+                elif res.get("status") == "error":
+                    logging.warning(f"⚠️ Promoção de {sanitized_rec['symbol']} falhou: {res.get('message')}")
+                    
+            logging.info(f"🎉 Data Quality Concluído: {saved_count} cotações promovidas para 'indicator_values' | {quarantined_count} em quarentena.")
         except Exception as e:
             trans.rollback()
             logging.error(f"❌ Erro ao processar validação em Produção: {e}")
