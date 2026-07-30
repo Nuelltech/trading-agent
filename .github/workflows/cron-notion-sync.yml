@@ -37,4 +37,5 @@ jobs:
           NOTION_PAINEL_MERCADO_DATABASE_ID: ${{ secrets.NOTION_PAINEL_MERCADO_DATABASE_ID || secrets.NOTION_DATABASE_ID }}
           NOTION_LIQUIDITY_DATABASE_ID: ${{ secrets.NOTION_LIQUIDITY_DATABASE_ID }}
         run: |
+          python scripts/sync_notion_painel_mercado.py
           python scripts/run_liquidity_analysis.py
