@@ -421,6 +421,7 @@ def phase4_inject_notion_initial(packages: List[Dict[str, Any]], radar_48h: str)
 
     db_schema = get_notion_db_schema_properties(NOTION_GEMINI_DB_ID)
     title_col = get_notion_title_col_name(NOTION_GEMINI_DB_ID, "Ativo")
+    date_col = "Data da Sessão" if "Data da Sessão" in db_schema else ("Data" if "Data" in db_schema else "Date")
     today_date = datetime.utcnow().strftime("%Y-%m-%d")
     url_query = f"https://api.notion.com/v1/databases/{NOTION_GEMINI_DB_ID}/query"
 
@@ -433,7 +434,7 @@ def phase4_inject_notion_initial(packages: List[Dict[str, Any]], radar_48h: str)
             "filter": {
                 "and": [
                     {"property": title_col, "title": {"equals": ticker}},
-                    {"property": "Data", "date": {"equals": today_date}}
+                    {"property": date_col, "date": {"equals": today_date}}
                 ]
             }
         }
@@ -486,7 +487,19 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
     try:
         import google.generativeai as genai
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel("gemini-1.5-pro")
+        
+        # Testar modelos em ordem de disponibilidade
+        model = None
+        for model_name in ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro-latest", "gemini-1.5-pro"]:
+            try:
+                model = genai.GenerativeModel(model_name)
+                logging.info(f"🤖 Modelo Gemini inicializado com sucesso: [{model_name}]")
+                break
+            except Exception:
+                continue
+
+        if not model:
+            model = genai.GenerativeModel("gemini-1.5-flash")
     except Exception as e:
         logging.error(f"❌ Falha ao inicializar SDK Google Generative AI: {e}")
         return
