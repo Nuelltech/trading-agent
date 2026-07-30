@@ -488,50 +488,64 @@ def phase4_inject_notion_initial(packages: List[Dict[str, Any]], radar_48h: str)
     return updated_packages
 
 def call_gemini_rest_api(prompt: str, api_key: str) -> str:
-    """Chama nativamente a REST API do Google Gemini (suporta gemini-1.5-flash, gemini-2.0-flash e gemini-1.5-pro)"""
+    """Chama nativamente a REST API do Google Gemini (com rotação de modelos e endpoints v1/v1beta)"""
     models_to_try = [
-        "gemini-1.5-flash",
         "gemini-2.0-flash",
+        "gemini-2.0-flash-exp",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-8b",
+        "gemini-1.5-pro-latest",
         "gemini-1.5-pro",
         "gemini-pro"
     ]
 
+    endpoints = [
+        "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
+        "https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={key}"
+    ]
+
     for model_name in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        payload = {
-            "contents": [
-                {
-                    "parts": [{"text": prompt}]
-                }
-            ]
-        }
-        headers = {"Content-Type": "application/json"}
-        try:
-            logging.info(f"🤖 [GEMINI REST] Chamando API do Gemini com o modelo [{model_name}]...")
-            res = requests.post(url, headers=headers, json=payload, timeout=20)
-            if res.status_code == 200:
-                data = res.json()
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        text_content = parts[0].get("text", "").strip()
-                        if text_content:
-                            logging.info(f"✨ [GEMINI REST] Veredito gerado com sucesso via [{model_name}]! ({len(text_content)} caracteres)")
-                            return text_content
-            else:
-                logging.warning(f"⚠️ [GEMINI REST] Modelo [{model_name}] respondeu HTTP {res.status_code}: {res.text[:200]}")
-        except Exception as e:
-            logging.warning(f"⚠️ [GEMINI REST] Erro ao tentar modelo [{model_name}]: {e}")
+        for ep_template in endpoints:
+            url = ep_template.format(model=model_name, key=api_key)
+            payload = {
+                "contents": [
+                    {
+                        "parts": [{"text": prompt}]
+                    }
+                ]
+            }
+            headers = {"Content-Type": "application/json"}
+            try:
+                logging.info(f"🤖 [GEMINI REST] Tentando endpoint [{model_name}]...")
+                res = requests.post(url, headers=headers, json=payload, timeout=15)
+                if res.status_code == 200:
+                    data = res.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            text_content = parts[0].get("text", "").strip()
+                            if text_content:
+                                logging.info(f"✨ [GEMINI REST] Veredito gerado com sucesso via [{model_name}]! ({len(text_content)} caracteres)")
+                                return text_content
+                else:
+                    logging.warning(f"⚠️ [GEMINI REST] [{model_name}] respondeu HTTP {res.status_code}")
+            except Exception as e:
+                logging.warning(f"⚠️ [GEMINI REST] Erro ao tentar modelo [{model_name}]: {e}")
 
     # Fallback final via SDK GenerativeAI se disponível
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        m = genai.GenerativeModel("gemini-1.5-flash")
-        r = m.generate_content(prompt)
-        if r and r.text:
-            return r.text.strip()
+        for sdk_model in ["gemini-2.0-flash", "gemini-1.5-flash-latest", "gemini-1.5-flash"]:
+            try:
+                m = genai.GenerativeModel(sdk_model)
+                r = m.generate_content(prompt)
+                if r and r.text:
+                    return r.text.strip()
+            except Exception:
+                continue
     except Exception as ex:
         logging.error(f"❌ [GEMINI SDK] Falha no fallback SDK: {ex}")
 
