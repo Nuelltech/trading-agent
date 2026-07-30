@@ -35,19 +35,26 @@ NOTION_HEADERS = {
     "Notion-Version": "2022-06-28"
 }
 
-def get_notion_title_col_name(db_id: str, default_name: str = "Ticker") -> str:
-    """Descobre o nome da coluna do tipo 'title' de uma database do Notion"""
+def get_notion_db_schema_properties(db_id: str) -> Dict[str, str]:
+    """Retorna um dicionário {property_name: property_type} da database do Notion"""
     url = f"https://api.notion.com/v1/databases/{db_id}"
     try:
         res = requests.get(url, headers=NOTION_HEADERS, timeout=10)
         if res.status_code == 200:
             properties = res.json().get("properties", {})
-            for prop_name, prop_data in properties.items():
-                if prop_data.get("type") == "title":
-                    logging.info(f"🔍 Coluna 'title' detetada para db [{db_id}]: [{prop_name}]")
-                    return prop_name
+            schema = {p_name: p_data.get("type") for p_name, p_data in properties.items()}
+            logging.info(f"🔍 Schema detetado para db [{db_id}]: {schema}")
+            return schema
     except Exception as e:
-        logging.warning(f"Falha ao obter title property da db {db_id}: {e}")
+        logging.warning(f"Falha ao ler propriedades da db {db_id}: {e}")
+    return {}
+
+def get_notion_title_col_name(db_id: str, default_name: str = "Ticker") -> str:
+    """Descobre o nome da coluna do tipo 'title' de uma database do Notion"""
+    schema = get_notion_db_schema_properties(db_id)
+    for prop_name, prop_type in schema.items():
+        if prop_type == "title":
+            return prop_name
     return default_name
 
 def get_claude_watchlist() -> List[Dict[str, Any]]:
@@ -232,10 +239,21 @@ def sync_claude_close_todos_ativos() -> bool:
         logging.error("❌ NOTION_CLAUDE_CLOSE_DATABASE_ID não configurado.")
         return False
 
-    title_col = get_notion_title_col_name(NOTION_CLAUDE_CLOSE_DATABASE_ID, "Ticker")
+    db_schema = get_notion_db_schema_properties(NOTION_CLAUDE_CLOSE_DATABASE_ID)
+    title_col = "Ticker"
+    for p_name, p_type in db_schema.items():
+        if p_type == "title":
+            title_col = p_name
+            break
+
+    date_col = "Data" if "Data" in db_schema else ("Date" if "Date" in db_schema else "Data")
+    close_col = "Close" if "Close" in db_schema else ("Fecho" if "Fecho" in db_schema else "Close")
+    name_col = "Nome" if "Nome" in db_schema else ("Name" if "Name" in db_schema else "Nome")
+    cat_col = "Categoria" if "Categoria" in db_schema else ("Category" if "Category" in db_schema else "Categoria")
+
     today_date = datetime.utcnow().strftime("%Y-%m-%d")
 
-    # Obter catálogo completo de ativos no MySQL (ou lista completa padrão)
+    # Obter catálogo completo de ativos no MySQL
     all_indicators = []
     try:
         from app.database import engine
@@ -245,7 +263,7 @@ def sync_claude_close_todos_ativos() -> bool:
             for r in rows:
                 all_indicators.append({"ticker": r[0], "nome": r[1] or r[0], "categoria": r[2] or "Geral"})
     except Exception as e:
-        logging.warning(f"⚠️ Erro ao consultar indicators_catalog ({e}). Usando catálogo completo estático...")
+        logging.warning(f"⚠️ Erro ao consultar indicators_catalog ({e}). Usando catálogo estático...")
 
     if not all_indicators:
         all_indicators = [
@@ -290,7 +308,7 @@ def sync_claude_close_todos_ativos() -> bool:
             "filter": {
                 "and": [
                     {"property": title_col, "title": {"equals": ticker}},
-                    {"property": "Data", "date": {"equals": today_date}}
+                    {"property": date_col, "date": {"equals": today_date}}
                 ]
             }
         }
@@ -304,25 +322,43 @@ def sync_claude_close_todos_ativos() -> bool:
                 url_patch = f"https://api.notion.com/v1/pages/{page_id}"
                 patch_payload = {
                     "properties": {
-                        "Close": {"number": round(close_val, 4)}
+                        close_col: {"number": round(close_val, 4)}
                     }
                 }
-                requests.patch(url_patch, headers=NOTION_HEADERS, json=patch_payload, timeout=10)
-                logging.info(f"✅ [CLAUDE CLOSE] [{ticker}] atualizado no Notion (Close={close_val})")
+                patch_res = requests.patch(url_patch, headers=NOTION_HEADERS, json=patch_payload, timeout=10)
+                if patch_res.status_code in [200, 201]:
+                    logging.info(f"✅ [CLAUDE CLOSE] [{ticker}] atualizado no Notion (Close={close_val})")
+                else:
+                    logging.error(f"❌ [CLAUDE CLOSE] Erro no PATCH [{ticker}] ({patch_res.status_code}): {patch_res.text}")
             else:
+                # Construir propriedades dinamicamente de acordo com o schema retornado pelo Notion
+                props = {
+                    title_col: {"title": [{"text": {"content": ticker}}]},
+                    close_col: {"number": round(close_val, 4)},
+                    date_col: {"date": {"start": today_date}}
+                }
+
+                if name_col in db_schema:
+                    props[name_col] = {"rich_text": [{"text": {"content": nome}}]}
+
+                if cat_col in db_schema:
+                    cat_type = db_schema[cat_col]
+                    if cat_type == "select":
+                        props[cat_col] = {"select": {"name": cat}}
+                    elif cat_type == "rich_text":
+                        props[cat_col] = {"rich_text": [{"text": {"content": cat}}]}
+
                 post_payload = {
                     "parent": {"database_id": NOTION_CLAUDE_CLOSE_DATABASE_ID},
-                    "properties": {
-                        title_col: {"title": [{"text": {"content": ticker}}]},
-                        "Nome": {"rich_text": [{"text": {"content": nome}}]},
-                        "Categoria": {"select": {"name": cat}},
-                        "Data": {"date": {"start": today_date}},
-                        "Close": {"number": round(close_val, 4)}
-                    }
+                    "properties": props
                 }
+
                 url_post = "https://api.notion.com/v1/pages"
                 post_res = requests.post(url_post, headers=NOTION_HEADERS, json=post_payload, timeout=10)
-                logging.info(f"✅ [CLAUDE CLOSE] Linha criada para [{ticker}] (Status: {post_res.status_code})")
+                if post_res.status_code in [200, 201]:
+                    logging.info(f"✅ [CLAUDE CLOSE] Linha criada para [{ticker}] (Close={close_val})")
+                else:
+                    logging.error(f"❌ [CLAUDE CLOSE] Erro ao criar linha [{ticker}] ({post_res.status_code}): {post_res.text}")
 
         except Exception as e:
             logging.error(f"❌ Erro no Close Diário Claude para [{ticker}]: {e}")
@@ -345,9 +381,7 @@ def sync_claude_resumo_regime() -> bool:
     title_col = get_notion_title_col_name(NOTION_CLAUDE_REGIME_DATABASE_ID, "Data")
     url_query = f"https://api.notion.com/v1/databases/{NOTION_CLAUDE_REGIME_DATABASE_ID}/query"
 
-    # Procurar se já existe linha para a data de hoje (por ex: "2026-07-30" ou "Sessão 2026-07-30")
-    session_title = today_date
-
+    # Procurar se já existe linha para a data de hoje
     query_payload = {
         "filter": {
             "property": title_col,
