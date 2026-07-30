@@ -681,9 +681,18 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
             import time
             time.sleep(4)  # Anti-rate-limit: 4s entre chamadas (~15 pedidos/min = dentro do free tier)
 
-def run_gemini_trader_pipeline():
-    """Pipeline Principal do Gemini Trader (Fases 1 a 5)"""
+def run_gemini_trader_pipeline(enable_gemini_api: bool = False):
+    """Pipeline Principal do Gemini Trader (Fases 1 a 5).
+    
+    Args:
+        enable_gemini_api: Se True, executa a Fase 5 (chamada à API do Gemini para veredito).
+                           Se False (default), apenas faz ETL + injecta dados quantitativos no Notion.
+    """
     logging.info("🚀 Iniciando Pipeline ETL & Gemini Trader (Adenda Enriquecimento Analítico Pandas)...")
+    if enable_gemini_api:
+        logging.info("🤖 [FASE 5 ATIVA] Modo Briefing Noturno: API Gemini será invocada.")
+    else:
+        logging.info("📊 [FASE 5 DESATIVADA] Modo ETL Diurno: apenas dados quantitativos. Gemini não será invocado.")
     
     # Fase 1 & 2
     vigilance_items = phase1_extract_vigilance_config()
@@ -705,7 +714,10 @@ def run_gemini_trader_pipeline():
     # Fase 4 (Notion Initial Status & Quantitative Data Injection)
     updated_packages = phase4_inject_notion_initial(packages, radar_48h)
 
-    # Fase 5 (Gemini AI Inference & Verdict Update)
-    phase5_invoke_gemini_and_update(updated_packages)
+    # Fase 5 (Gemini AI Inference & Verdict Update) — só corre no Briefing Noturno das 22h00
+    if enable_gemini_api:
+        phase5_invoke_gemini_and_update(updated_packages)
+        logging.info("🎉 Pipeline completo (ETL + Briefing Gemini) concluído com sucesso!")
+    else:
+        logging.info("✅ Pipeline ETL concluído com sucesso! (Fase 5 reservada para corrida das 22h00)")
 
-    logging.info("🎉 Pipeline Gemini Trader concluído com sucesso!")
