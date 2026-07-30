@@ -39,7 +39,8 @@ jobs:
           NOTION_LIQUIDITY_DATABASE_ID: ${{ secrets.NOTION_LIQUIDITY_DATABASE_ID }}
           NOTION_CONFIG_DB_ID: ${{ secrets.NOTION_CONFIG_DB_ID }}
           NOTION_CLAUDE_OHLC_DATABASE_ID: ${{ secrets.NOTION_CLAUDE_OHLC_DATABASE_ID }}
+          NOTION_CLAUDE_CLOSE_DATABASE_ID: ${{ secrets.NOTION_CLAUDE_CLOSE_DATABASE_ID }}
+          NOTION_CLAUDE_REGIME_DATABASE_ID: ${{ secrets.NOTION_CLAUDE_REGIME_DATABASE_ID || secrets.NOTION_PAINEL_MERCADO_DATABASE_ID }}
         run: |
-          python scripts/sync_notion_painel_mercado.py
-          python scripts/sync_notion_claude_ohlc.py
+          python scripts/sync_notion_claude.py
           python scripts/run_liquidity_analysis.py
