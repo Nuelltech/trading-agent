@@ -487,68 +487,87 @@ def phase4_inject_notion_initial(packages: List[Dict[str, Any]], radar_48h: str)
 
     return updated_packages
 
-def call_gemini_rest_api(prompt: str, api_key: str) -> str:
-    """Chama nativamente a REST API do Google Gemini (com rotação de modelos e endpoints v1/v1beta)"""
-    models_to_try = [
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-exp",
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-flash",
-        "gemini-1.5-flash-8b",
-        "gemini-1.5-pro-latest",
-        "gemini-1.5-pro",
-        "gemini-pro"
-    ]
+def call_gemini_api(prompt: str, api_key: str) -> str:
+    """
+    Chama a API do Google Gemini para gerar um veredito tático.
+    Tenta primeiro o novo SDK `google.genai` (v2), depois cai para REST nativo,
+    e por último para o SDK legado `google.generativeai`.
+    """
+    import time
 
-    endpoints = [
-        "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
-        "https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={key}"
-    ]
-
-    for model_name in models_to_try:
-        for ep_template in endpoints:
-            url = ep_template.format(model=model_name, key=api_key)
-            payload = {
-                "contents": [
-                    {
-                        "parts": [{"text": prompt}]
-                    }
-                ]
-            }
-            headers = {"Content-Type": "application/json"}
+    # ─── ABORDAGEM 1: Novo SDK google.genai (recomendado pela Google) ───────────
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        for model_name in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]:
             try:
-                logging.info(f"🤖 [GEMINI REST] Tentando endpoint [{model_name}]...")
-                res = requests.post(url, headers=headers, json=payload, timeout=15)
+                logging.info(f"🤖 [GEMINI SDK v2] Tentando modelo [{model_name}] via google.genai...")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                if response and response.text:
+                    text = response.text.strip()
+                    if len(text) > 50:  # Veredito real, não um fallback curto
+                        logging.info(f"✨ [GEMINI SDK v2] Veredito gerado via [{model_name}]! ({len(text)} caracteres)")
+                        return text
+            except Exception as sdk_err:
+                logging.warning(f"⚠️ [GEMINI SDK v2] [{model_name}] falhou: {sdk_err}")
+                time.sleep(1)
+                continue
+    except ImportError:
+        logging.warning("⚠️ [GEMINI SDK v2] Pacote google-genai não instalado. Tentando REST...")
+    except Exception as e:
+        logging.warning(f"⚠️ [GEMINI SDK v2] Falha geral: {e}")
+
+    # ─── ABORDAGEM 2: REST HTTP nativa (gemini-2.0-flash via v1beta) ─────────────
+    rest_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    rest_endpoints = [
+        "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
+        "https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={key}",
+    ]
+    for model_name in rest_models:
+        for ep in rest_endpoints:
+            url = ep.format(model=model_name, key=api_key)
+            try:
+                logging.info(f"🤖 [GEMINI REST] Tentando [{model_name}]...")
+                res = requests.post(url, headers={"Content-Type": "application/json"},
+                                    json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=20)
                 if res.status_code == 200:
-                    data = res.json()
-                    candidates = data.get("candidates", [])
+                    candidates = res.json().get("candidates", [])
                     if candidates:
                         parts = candidates[0].get("content", {}).get("parts", [])
                         if parts:
-                            text_content = parts[0].get("text", "").strip()
-                            if text_content:
-                                logging.info(f"✨ [GEMINI REST] Veredito gerado com sucesso via [{model_name}]! ({len(text_content)} caracteres)")
-                                return text_content
+                            text = parts[0].get("text", "").strip()
+                            if text and len(text) > 50:
+                                logging.info(f"✨ [GEMINI REST] Veredito via [{model_name}]! ({len(text)} caracteres)")
+                                return text
+                elif res.status_code == 429:
+                    logging.warning(f"⚠️ [GEMINI REST] Rate limit (429) em [{model_name}]. Aguardando 3s...")
+                    time.sleep(3)
+                    break  # Tentar próximo modelo após espera
                 else:
-                    logging.warning(f"⚠️ [GEMINI REST] [{model_name}] respondeu HTTP {res.status_code}")
+                    logging.warning(f"⚠️ [GEMINI REST] [{model_name}] HTTP {res.status_code}")
             except Exception as e:
-                logging.warning(f"⚠️ [GEMINI REST] Erro ao tentar modelo [{model_name}]: {e}")
+                logging.warning(f"⚠️ [GEMINI REST] Erro em [{model_name}]: {e}")
 
-    # Fallback final via SDK GenerativeAI se disponível
+    # ─── ABORDAGEM 3: SDK Legado google.generativeai (fallback final) ────────────
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        for sdk_model in ["gemini-2.0-flash", "gemini-1.5-flash-latest", "gemini-1.5-flash"]:
+        import google.generativeai as genai_legacy
+        genai_legacy.configure(api_key=api_key)
+        for sdk_model in ["gemini-1.5-flash", "gemini-pro"]:
             try:
-                m = genai.GenerativeModel(sdk_model)
+                m = genai_legacy.GenerativeModel(sdk_model)
                 r = m.generate_content(prompt)
-                if r and r.text:
+                if r and r.text and len(r.text.strip()) > 50:
+                    logging.info(f"✨ [GEMINI SDK legado] Veredito via [{sdk_model}]! ({len(r.text.strip())} caracteres)")
                     return r.text.strip()
             except Exception:
                 continue
     except Exception as ex:
-        logging.error(f"❌ [GEMINI SDK] Falha no fallback SDK: {ex}")
+        logging.error(f"❌ [GEMINI SDK legado] Falha: {ex}")
 
+    logging.error("❌ Todas as abordagens de invocação do Gemini falharam. Sem veredito real.")
     return ""
 
 def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
@@ -581,9 +600,10 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
         """
 
         try:
-            verdict_text = call_gemini_rest_api(prompt, GEMINI_API_KEY)
+            verdict_text = call_gemini_api(prompt, GEMINI_API_KEY)
             if not verdict_text:
-                verdict_text = "Análise quantitativa concluída."
+                logging.warning(f"⚠️ [{pkg['ticker']}] Gemini não retornou veredito. Linha ficará como '[Em processamento]'.")
+                continue
 
             logging.info(f"✨ [FASE 5 AUDIT] Veredito do Gemini recebido para [{pkg['ticker']}] ({len(verdict_text)} caracteres).")
 
@@ -619,6 +639,9 @@ def phase5_invoke_gemini_and_update(packages: List[Dict[str, Any]]):
 
         except Exception as ex:
             logging.error(f"❌ [FASE 5 AUDIT] Falha de execução/API Gemini para [{pkg['ticker']}]: {ex}")
+        finally:
+            import time
+            time.sleep(4)  # Anti-rate-limit: 4s entre chamadas (~15 pedidos/min = dentro do free tier)
 
 def run_gemini_trader_pipeline():
     """Pipeline Principal do Gemini Trader (Fases 1 a 5)"""
