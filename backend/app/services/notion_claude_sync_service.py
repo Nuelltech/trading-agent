@@ -8,7 +8,7 @@ Gere a sincronização das 3 databases exclusivas do Claude no Notion:
    - Lê 'Configuração de Vigilância' no início de cada execução (Ativo == True AND Vigiado Por IN ('Claude', 'Ambos'))
    - Upsert com Open fixo, High=max(), Low=min(), Close=mais recente.
 2. Close Diário — Todos os Ativos — Claude (25fd82e4-92d7-4401-af67-a39daeec9e0b)
-   - Processa sempre os 36 ativos do indicators_catalog sem depender da Configuração de Vigilância.
+   - Processa SEMPRE todos os 36 ativos do indicators_catalog sem depender da Configuração de Vigilância.
 3. Resumo Diário — Regime de Risco — Claude (3efd828b-84a7-4966-8bdf-fe9c93657edd)
    - Cria/Atualiza a linha do dia (só Data); NUNCA escreve no campo Regime (reservado ao Claude).
 """
@@ -34,6 +34,21 @@ NOTION_HEADERS = {
     "Content-Type": "application/json",
     "Notion-Version": "2022-06-28"
 }
+
+def get_notion_title_col_name(db_id: str, default_name: str = "Ticker") -> str:
+    """Descobre o nome da coluna do tipo 'title' de uma database do Notion"""
+    url = f"https://api.notion.com/v1/databases/{db_id}"
+    try:
+        res = requests.get(url, headers=NOTION_HEADERS, timeout=10)
+        if res.status_code == 200:
+            properties = res.json().get("properties", {})
+            for prop_name, prop_data in properties.items():
+                if prop_data.get("type") == "title":
+                    logging.info(f"🔍 Coluna 'title' detetada para db [{db_id}]: [{prop_name}]")
+                    return prop_name
+    except Exception as e:
+        logging.warning(f"Falha ao obter title property da db {db_id}: {e}")
+    return default_name
 
 def get_claude_watchlist() -> List[Dict[str, Any]]:
     """
@@ -70,7 +85,7 @@ def get_claude_watchlist() -> List[Dict[str, Any]]:
                 continue
 
             # Ticker (Title)
-            ticker_list = props.get("Ticker", {}).get("title", [])
+            ticker_list = props.get("Ticker", {}).get("title", []) or props.get("Name", {}).get("title", [])
             ticker = ticker_list[0].get("text", {}).get("content", "") if ticker_list else ""
 
             # Nome (Rich text)
@@ -135,6 +150,7 @@ def sync_claude_ohlc_vigiados() -> bool:
         logging.error("❌ NOTION_CLAUDE_OHLC_DATABASE_ID não configurado.")
         return False
 
+    title_col = get_notion_title_col_name(NOTION_CLAUDE_OHLC_DATABASE_ID, "Ticker")
     today_date = datetime.utcnow().strftime("%Y-%m-%d")
     url_query = f"https://api.notion.com/v1/databases/{NOTION_CLAUDE_OHLC_DATABASE_ID}/query"
 
@@ -149,7 +165,7 @@ def sync_claude_ohlc_vigiados() -> bool:
         query_payload = {
             "filter": {
                 "and": [
-                    {"property": "Ticker", "title": {"equals": ticker}},
+                    {"property": title_col, "title": {"equals": ticker}},
                     {"property": "Data", "date": {"equals": today_date}}
                 ]
             }
@@ -160,7 +176,6 @@ def sync_claude_ohlc_vigiados() -> bool:
             existing_results = res.json().get("results", []) if res.status_code == 200 else []
 
             if existing_results:
-                # Upsert Existente: High=max(), Low=min(), Close=mais recente (Open/Data NUNCA sobrescritos)
                 page = existing_results[0]
                 page_id = page["id"]
                 props = page.get("properties", {})
@@ -184,11 +199,10 @@ def sync_claude_ohlc_vigiados() -> bool:
                 logging.info(f"✅ [CLAUDE OHLC] [{ticker}] atualizado (High={final_high}, Low={final_low}, Close={new_ohlc['close']})")
 
             else:
-                # Criação Nova: Escreve Open inicial
                 post_payload = {
                     "parent": {"database_id": NOTION_CLAUDE_OHLC_DATABASE_ID},
                     "properties": {
-                        "Ticker": {"title": [{"text": {"content": ticker}}]},
+                        title_col: {"title": [{"text": {"content": ticker}}]},
                         "Nome": {"rich_text": [{"text": {"content": nome}}]},
                         "Data": {"date": {"start": today_date}},
                         "Open": {"number": round(new_ohlc["open"], 4)},
@@ -218,33 +232,46 @@ def sync_claude_close_todos_ativos() -> bool:
         logging.error("❌ NOTION_CLAUDE_CLOSE_DATABASE_ID não configurado.")
         return False
 
+    title_col = get_notion_title_col_name(NOTION_CLAUDE_CLOSE_DATABASE_ID, "Ticker")
     today_date = datetime.utcnow().strftime("%Y-%m-%d")
 
-    # Obter catálogo completo de ativos no MySQL (ou lista padrão dos 36 ativos)
+    # Obter catálogo completo de ativos no MySQL (ou lista completa padrão)
     all_indicators = []
     try:
         from app.database import engine
         with engine.connect() as conn:
-            sql = text("SELECT ticker, name, asset_class FROM indicators_catalog")
+            sql = text("SELECT symbol, name, asset_class FROM indicators_catalog")
             rows = conn.execute(sql).fetchall()
             for r in rows:
-                all_indicators.append({"ticker": r[0], "nome": r[1], "categoria": r[2]})
+                all_indicators.append({"ticker": r[0], "nome": r[1] or r[0], "categoria": r[2] or "Geral"})
     except Exception as e:
-        logging.warning(f"⚠️ Erro ao consultar indicators_catalog ({e}). Usando lista estática...")
+        logging.warning(f"⚠️ Erro ao consultar indicators_catalog ({e}). Usando catálogo completo estático...")
 
     if not all_indicators:
         all_indicators = [
             {"ticker": "BZ=F", "nome": "Brent Crude", "categoria": "Commodities"},
             {"ticker": "GC=F", "nome": "Gold", "categoria": "Commodities"},
             {"ticker": "CL=F", "nome": "WTI Crude", "categoria": "Commodities"},
+            {"ticker": "HG=F", "nome": "Copper", "categoria": "Commodities"},
             {"ticker": "EURUSD=X", "nome": "EUR/USD", "categoria": "Forex"},
             {"ticker": "GBPUSD=X", "nome": "GBP/USD", "categoria": "Forex"},
             {"ticker": "USDJPY=X", "nome": "USD/JPY", "categoria": "Forex"},
+            {"ticker": "DX-Y.NYB", "nome": "US Dollar Index", "categoria": "Forex"},
             {"ticker": "^GSPC", "nome": "S&P 500", "categoria": "Indices"},
             {"ticker": "^NDX", "nome": "Nasdaq 100", "categoria": "Indices"},
             {"ticker": "^GDAXI", "nome": "DAX", "categoria": "Indices"},
             {"ticker": "^TNX", "nome": "US 10Y Yield", "categoria": "Rates"},
-            {"ticker": "^VIX", "nome": "VIX Index", "categoria": "Volatility"}
+            {"ticker": "DGS2", "nome": "US 2Y Yield", "categoria": "Rates"},
+            {"ticker": "IRLTLT01DEM156N", "nome": "Germany 10Y Yield", "categoria": "Rates"},
+            {"ticker": "IRLTLT01GBM156N", "nome": "UK 10Y Yield", "categoria": "Rates"},
+            {"ticker": "IRLTLT01JPM156N", "nome": "Japan 10Y Yield", "categoria": "Rates"},
+            {"ticker": "^VIX", "nome": "VIX Index", "categoria": "Volatility"},
+            {"ticker": "O", "nome": "Realty Income", "categoria": "Equities"},
+            {"ticker": "DAL", "nome": "Delta Air Lines", "categoria": "Equities"},
+            {"ticker": "F", "nome": "Ford Motor", "categoria": "Equities"},
+            {"ticker": "ENPH", "nome": "Enphase Energy", "categoria": "Equities"},
+            {"ticker": "NKE", "nome": "Nike", "categoria": "Equities"},
+            {"ticker": "STLA", "nome": "Stellantis", "categoria": "Equities"}
         ]
 
     url_query = f"https://api.notion.com/v1/databases/{NOTION_CLAUDE_CLOSE_DATABASE_ID}/query"
@@ -262,7 +289,7 @@ def sync_claude_close_todos_ativos() -> bool:
         query_payload = {
             "filter": {
                 "and": [
-                    {"property": "Ticker", "title": {"equals": ticker}},
+                    {"property": title_col, "title": {"equals": ticker}},
                     {"property": "Data", "date": {"equals": today_date}}
                 ]
             }
@@ -286,7 +313,7 @@ def sync_claude_close_todos_ativos() -> bool:
                 post_payload = {
                     "parent": {"database_id": NOTION_CLAUDE_CLOSE_DATABASE_ID},
                     "properties": {
-                        "Ticker": {"title": [{"text": {"content": ticker}}]},
+                        title_col: {"title": [{"text": {"content": ticker}}]},
                         "Nome": {"rich_text": [{"text": {"content": nome}}]},
                         "Categoria": {"select": {"name": cat}},
                         "Data": {"date": {"start": today_date}},
@@ -294,8 +321,8 @@ def sync_claude_close_todos_ativos() -> bool:
                     }
                 }
                 url_post = "https://api.notion.com/v1/pages"
-                requests.post(url_post, headers=NOTION_HEADERS, json=post_payload, timeout=10)
-                logging.info(f"✅ [CLAUDE CLOSE] Linha criada para [{ticker}]")
+                post_res = requests.post(url_post, headers=NOTION_HEADERS, json=post_payload, timeout=10)
+                logging.info(f"✅ [CLAUDE CLOSE] Linha criada para [{ticker}] (Status: {post_res.status_code})")
 
         except Exception as e:
             logging.error(f"❌ Erro no Close Diário Claude para [{ticker}]: {e}")
@@ -307,7 +334,7 @@ def sync_claude_close_todos_ativos() -> bool:
 # -----------------------------------------------------------------------------
 def sync_claude_resumo_regime() -> bool:
     """
-    Cria ou verifica 1 única linha por dia com 'Data = YYYY-MM-DD'.
+    Cria ou verifica 1 única linha por dia com 'Data = YYYY-MM-DD' (ou Sessão YYYY-MM-DD).
     REGRA RÍGIDA: O cron NUNCA escreve o campo 'Regime' — este é exclusivo do Claude (Camada 2).
     """
     if not NOTION_TOKEN or not NOTION_CLAUDE_REGIME_DATABASE_ID:
@@ -315,14 +342,17 @@ def sync_claude_resumo_regime() -> bool:
         return False
 
     today_date = datetime.utcnow().strftime("%Y-%m-%d")
-    session_title = f"Sessão {today_date}"
+    title_col = get_notion_title_col_name(NOTION_CLAUDE_REGIME_DATABASE_ID, "Data")
     url_query = f"https://api.notion.com/v1/databases/{NOTION_CLAUDE_REGIME_DATABASE_ID}/query"
+
+    # Procurar se já existe linha para a data de hoje (por ex: "2026-07-30" ou "Sessão 2026-07-30")
+    session_title = today_date
 
     query_payload = {
         "filter": {
-            "property": "Data",
+            "property": title_col,
             "title": {
-                "equals": session_title
+                "contains": today_date
             }
         }
     }
@@ -332,15 +362,15 @@ def sync_claude_resumo_regime() -> bool:
         results = res.json().get("results", []) if res.status_code == 200 else []
 
         if results:
-            logging.info(f"ℹ️ [CLAUDE REGIME] Linha da [{session_title}] já existe no Notion. O cron não altera o campo Regime.")
+            logging.info(f"ℹ️ [CLAUDE REGIME] Linha do dia [{today_date}] já existe no Notion. O cron não altera o campo Regime.")
         else:
-            # Criar linha só com a propriedade Data (Title)
+            # Criar linha só com a propriedade Title (Data)
             post_payload = {
                 "parent": {"database_id": NOTION_CLAUDE_REGIME_DATABASE_ID},
                 "properties": {
-                    "Data": {
+                    title_col: {
                         "title": [
-                            {"text": {"content": session_title}}
+                            {"text": {"content": f"Sessão {today_date}"}}
                         ]
                     }
                 }
@@ -348,7 +378,7 @@ def sync_claude_resumo_regime() -> bool:
             url_post = "https://api.notion.com/v1/pages"
             post_res = requests.post(url_post, headers=NOTION_HEADERS, json=post_payload, timeout=10)
             if post_res.status_code in [200, 201]:
-                logging.info(f"✅ [CLAUDE REGIME] Linha da [{session_title}] criada no Notion com o campo Regime preservado em branco.")
+                logging.info(f"✅ [CLAUDE REGIME] Linha do dia [{today_date}] criada no Notion com o campo Regime preservado em branco.")
             else:
                 logging.error(f"❌ Erro ao criar linha no Resumo de Regime ({post_res.status_code}): {post_res.text}")
 
