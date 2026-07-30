@@ -32,7 +32,7 @@ def run_liquidity_analysis_pipeline():
     for symbol in WATCHLIST_ANALYSIS:
         try:
             # Buscar histórico diário recente de produção validada (ou yfinance para histórico completo 60d)
-            df = yf.download(symbol, period="3m", interval="1d", progress=False)
+            df = yf.download(symbol, period="3mo", interval="1d", progress=False)
             if df.empty or len(df) < 60:
                 logging.info(f"⏭️ [{symbol}] Ignorado por possuir menos de 60 sessões (Cold-start ativo).")
                 continue
