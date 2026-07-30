@@ -41,6 +41,8 @@ jobs:
           NOTION_CLAUDE_OHLC_DATABASE_ID: ${{ secrets.NOTION_CLAUDE_OHLC_DATABASE_ID }}
           NOTION_CLAUDE_CLOSE_DATABASE_ID: ${{ secrets.NOTION_CLAUDE_CLOSE_DATABASE_ID }}
           NOTION_CLAUDE_REGIME_DATABASE_ID: ${{ secrets.NOTION_CLAUDE_REGIME_DATABASE_ID || secrets.NOTION_PAINEL_MERCADO_DATABASE_ID }}
+          NOTION_CALENDAR_DB_ID: ${{ secrets.NOTION_CALENDAR_DB_ID }}
         run: |
           python scripts/sync_notion_claude.py
           python scripts/run_liquidity_analysis.py
+          python scripts/sync_calendar_notion.py
