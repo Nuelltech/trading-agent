@@ -34,6 +34,7 @@ jobs:
           MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          NOTION_PAINEL_MERCADO_DATABASE_ID: ${{ secrets.NOTION_PAINEL_MERCADO_DATABASE_ID || secrets.NOTION_DATABASE_ID }}
           NOTION_LIQUIDITY_DATABASE_ID: ${{ secrets.NOTION_LIQUIDITY_DATABASE_ID }}
         run: |
           python scripts/run_liquidity_analysis.py
