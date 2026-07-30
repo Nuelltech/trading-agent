@@ -143,7 +143,7 @@ def publish_painel_mercado_to_notion(database_id: Optional[str] = None) -> bool:
     
     ratio_cobre_ouro = round(cobre / ouro, 6) if ouro > 0 and cobre > 0 else 0.0
     regime = "Risk-Off" if vix >= 25.0 else ("Risk-On" if vix <= 15.0 else "Neutro / Monitorização")
-    catalyst = f"Sessão Diária {today_date} — Ingestão e Análise Concluídas"
+    catalyst = fetch_today_catalyst() if 'fetch_today_catalyst' in globals() else ""
 
     properties_payload = {
         title_col_name: {
