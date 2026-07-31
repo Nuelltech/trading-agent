@@ -35,7 +35,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # ─── Constantes ─────────────────────────────────────────────────────────────
 
 FMP_API_KEY = os.getenv("FMP_API_KEY", "")
-FMP_BASE_URL = "https://financialmodelingprep.com/api"
+FMP_BASE_URL = "https://financialmodelingprep.com"
+# Endpoints v3/v4 foram descontinuados — usar /stable/ (migração FMP pós-Agosto 2025)
+# Endpoint único para toda a news: stock-latest devolve symbol em cada item
+FMP_STOCK_NEWS_ENDPOINT = "/stable/news/stock-latest"
+FMP_NEWS_LIMIT = 250  # Máximo por chamada confirmado pela FMP
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_KEY", "")
 NOTION_NEWS_DB_ID = os.getenv("NOTION_NEWS_DB_ID", "e1c8d3ab-a151-499f-8931-4537f29933ec")
@@ -49,8 +53,7 @@ NOTION_HEADERS = {
 
 # Máximo de dias para filtrar notícias (backfill inicial = 7 dias)
 BACKFILL_DAYS = 7
-# Limite por chamada à FMP
-FMP_NEWS_LIMIT = 50
+FMP_NEWS_LIMIT = 250  # Máximo por chamada confirmado pela FMP (era 50, corrigido)
 
 PALAVRAS_GEOPOLITICAS = [
     "war", "conflict", "sanctions", "military", "attack", "invasion",
@@ -95,28 +98,36 @@ def _fmp_get(endpoint: str, params: Dict[str, Any]) -> Optional[List[Dict]]:
         return None
 
 
-def fetch_stock_news(ticker: str, from_date: str, to_date: str) -> List[Dict]:
-    """Recolhe notícias de um ticker específico via FMP /v3/stock_news."""
-    logging.info(f"  📰 Recolhendo notícias para [{ticker}] de {from_date} a {to_date}...")
-    data = _fmp_get("/v3/stock_news", {
-        "tickers": ticker,
-        "limit": FMP_NEWS_LIMIT,
+def fetch_stock_news_batch(from_date: str, to_date: str, page: int = 0) -> List[Dict]:
+    """
+    Recolhe notícias de todos os tickers em UMA chamada via /stable/news/stock-latest.
+    O campo 'symbol' em cada item indica o ticker. Máx 250 por chamada.
+    Muito mais eficiente que 1 chamada por ticker (poupa quota diária do plano Free).
+    """
+    logging.info(f"  📰 Recolhendo batch de notícias (página {page}, from={from_date}, to={to_date})...")
+    data = _fmp_get(FMP_STOCK_NEWS_ENDPOINT, {
         "from": from_date,
-        "to": to_date
+        "to": to_date,
+        "limit": FMP_NEWS_LIMIT,
+        "page": page,
     })
-    time.sleep(0.5)  # Respeitar rate limit FMP free tier
-    if data is None:
-        return []
-    # Garantir que é source correta (FMP pode devolver notícias de outros tickers)
-    return [n for n in data if isinstance(n, dict)]
+    time.sleep(0.5)  # Respeitar rate limit FMP free tier (250/dia)
+    return data or []
+
+
+# Manter compatível com testes — alias para fetch_stock_news
+def fetch_stock_news(ticker: str, from_date: str, to_date: str) -> List[Dict]:
+    """Alias de compatibilidade. Em produção usar fetch_stock_news_batch."""
+    return [a for a in fetch_stock_news_batch(from_date, to_date) if a.get("symbol", "") == ticker]
 
 
 def fetch_general_news(page: int = 0) -> List[Dict]:
-    """Recolhe notícias macro gerais via FMP /v4/general_news."""
-    logging.info(f"  🌍 Recolhendo notícias gerais de mercado (página {page})...")
-    data = _fmp_get("/v4/general_news", {"page": page})
-    time.sleep(0.5)
-    return data or []
+    """Alias de compatibilidade. Em produção o pipeline usa fetch_stock_news_batch."""
+    return fetch_stock_news_batch(
+        from_date=(datetime.now(timezone.utc) - timedelta(days=BACKFILL_DAYS)).strftime("%Y-%m-%d"),
+        to_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        page=page,
+    )
 
 
 # ─── Helpers — Configuração de Vigilância ────────────────────────────────────
@@ -258,7 +269,8 @@ def upsert_noticia(artigo: Dict, ticker_relacionado: str = "") -> bool:
     """
     # ── Validações Anti-Mock ─────────────────────────────────────────────────
     titulo = (artigo.get("title") or "").strip()
-    fonte = (artigo.get("site") or artigo.get("source") or "").strip()
+    # 'publisher' é o campo da nova API /stable/ ; 'site' mantido para compatibilidade
+    fonte = (artigo.get("publisher") or artigo.get("site") or artigo.get("source") or "").strip()
 
     if not titulo:
         logging.debug("  ⏭️ Artigo sem título — ignorado.")
@@ -321,9 +333,15 @@ def upsert_noticia(artigo: Dict, ticker_relacionado: str = "") -> bool:
 
 def run_news_collection(backfill: bool = False) -> Dict[str, int]:
     """
-    Pipeline completo de recolha de notícias.
-    - backfill=True: últimos 7 dias
-    - backfill=False (modo cron): últimas 2 horas (cron de 30 min com margem)
+    Pipeline completo de recolha de notícias — otimizado para o plano Free da FMP (250/dia).
+
+    Estratégia: 1-2 chamadas batch a /stable/news/stock-latest com from/to/limit=250.
+    O campo 'symbol' em cada item determina o ticker relacionado.
+    Notícias de tickers ativos → 'Empresa Específica' / 'Earnings-Relacionado'.
+    Notícias de outros tickers → 'Macro Geral' (contexto de mercado).
+
+    backfill=True : últimos 7 dias, até 3 páginas (3 × 250 = 750 artigos máx)
+    backfill=False: últimas 2h (cron de 30 min com margem), 1 página
     """
     if not FMP_API_KEY:
         logging.error("❌ FMP_API_KEY não definida. Abortando recolha de notícias.")
@@ -343,62 +361,50 @@ def run_news_collection(backfill: bool = False) -> Dict[str, int]:
     from_str = desde.strftime("%Y-%m-%d")
     to_str = hoje.strftime("%Y-%m-%d")
 
+    # Ler watchlist uma vez — usado para categorização
+    tickers_ativos = set(get_active_tickers())
+    # Normalizar: remover prefixos/sufixos que a FMP não usa no campo symbol
+    tickers_fmp = {t.replace("^", "").replace("=X", "").replace("=F", "").replace("-Y.NYB", "") for t in tickers_ativos}
+    # Mapa reverso FMP symbol → ticker original (para o campo Notion)
+    ticker_map = {}
+    for t in tickers_ativos:
+        fmp = t.replace("^", "").replace("=X", "").replace("=F", "").replace("-Y.NYB", "")
+        ticker_map[fmp] = t
+
     stats = {"inserted": 0, "skipped": 0, "errors": 0}
+    pages_to_fetch = 3 if backfill else 1
 
-    # ── 1. Notícias por Ticker ────────────────────────────────────────────────
-    tickers = get_active_tickers()
-    logging.info(f"📊 1/2 Notícias por ticker ({len(tickers)} ativos)...")
-
-    for ticker in tickers:
-        artigos = fetch_stock_news(ticker, from_str, to_str)
-        if artigos is None:
-            stats["errors"] += 1
-            continue
-
-        # Filtrar por data no modo cron (FMP free pode não aceitar from/to para stock_news v3)
-        if not backfill:
-            artigos = [
-                a for a in artigos
-                if _parse_pub_date(a.get("publishedDate", "")) >= desde
-            ]
-
-        for artigo in artigos:
-            try:
-                result = upsert_noticia(artigo, ticker_relacionado=ticker)
-                if result:
-                    stats["inserted"] += 1
-                else:
-                    stats["skipped"] += 1
-            except Exception as e:
-                logging.warning(f"⚠️ Erro ao processar artigo de [{ticker}]: {e}")
-                stats["errors"] += 1
-
-    # ── 2. Notícias Gerais de Mercado ─────────────────────────────────────────
-    logging.info("🌍 2/2 Notícias gerais de mercado...")
-    pages_to_fetch = 3 if backfill else 1  # Backfill: mais páginas; cron: só última página
+    logging.info(f"📰 Batch fetch: {pages_to_fetch} páginas × 250 artigos = {pages_to_fetch * 250} máx. Watchlist: {len(tickers_ativos)} tickers.")
 
     for page in range(pages_to_fetch):
-        artigos = fetch_general_news(page=page)
+        artigos = fetch_stock_news_batch(from_str, to_str, page=page)
         if not artigos:
+            logging.info(f"  Página {page}: sem artigos — parar.")
             break
 
+        # Filtrar por data no modo cron (garantia extra mesmo que FMP filtre por from/to)
         if not backfill:
-            artigos = [
-                a for a in artigos
-                if _parse_pub_date(a.get("publishedDate", "")) >= desde
-            ]
-            if not artigos:
-                break  # Sem artigos recentes nesta página — parar
+            artigos_filtrados = [a for a in artigos if _parse_pub_date(a.get("publishedDate", "")) >= desde]
+            if not artigos_filtrados:
+                logging.info(f"  Página {page}: sem artigos nas últimas 2h — parar.")
+                break
+            artigos = artigos_filtrados
+
+        logging.info(f"  Página {page}: {len(artigos)} artigos a processar...")
 
         for artigo in artigos:
             try:
-                result = upsert_noticia(artigo, ticker_relacionado="")
+                # Determinar ticker relacionado pelo campo 'symbol' da FMP
+                symbol_fmp = (artigo.get("symbol") or "").strip()
+                ticker_relacionado = ticker_map.get(symbol_fmp, symbol_fmp)
+
+                result = upsert_noticia(artigo, ticker_relacionado=ticker_relacionado)
                 if result:
                     stats["inserted"] += 1
                 else:
                     stats["skipped"] += 1
             except Exception as e:
-                logging.warning(f"⚠️ Erro ao processar artigo geral: {e}")
+                logging.warning(f"⚠️ Erro ao processar artigo [{artigo.get('symbol', '?')}]: {e}")
                 stats["errors"] += 1
 
     logging.info(
