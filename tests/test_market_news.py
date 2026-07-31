@@ -233,21 +233,9 @@ class TestParsePubDate(unittest.TestCase):
 class TestRunNewsCollectionGuardrails(unittest.TestCase):
     """Testa que o pipeline falha silenciosamente sem credenciais (nunca insere mock)."""
 
-    def test_aborta_sem_fmp_api_key(self):
-        with patch.dict('os.environ', {'FMP_API_KEY': ''}, clear=False):
-            # Reimportar com a variável de ambiente zerada
-            import importlib
-            import app.services.news_collector as nc
-            importlib.reload(nc)
-            # Patch após reload
-            with patch.object(nc, 'FMP_API_KEY', ''):
-                stats = nc.run_news_collection(backfill=False)
-                self.assertEqual(stats["inserted"], 0)
-
     def test_aborta_sem_notion_token(self):
         import app.services.news_collector as nc
-        with patch.object(nc, 'FMP_API_KEY', 'test-key'), \
-             patch.object(nc, 'NOTION_TOKEN', ''):
+        with patch.object(nc, 'NOTION_TOKEN', ''):
             stats = nc.run_news_collection(backfill=False)
             self.assertEqual(stats["inserted"], 0)
 

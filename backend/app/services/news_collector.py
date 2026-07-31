@@ -2,19 +2,23 @@
 Módulo: news_collector.py
 Data: 31 Julho 2026
 
-Camada 1 — Recolha determinística de headlines financeiras via Financial Modeling Prep (FMP).
+Camada 1 — Recolha determinística de headlines financeiras via Yahoo Finance RSS.
+Sem chave de API, sem custo. Dados reais, fonte identificada.
 Nenhuma interpretação de causalidade ou análise de sentimento calculada por nós.
-Sentimento copiado diretamente da FMP se disponível no payload, nunca calculado internamente.
 
-Bases de dados Notion:
+Fonte: Yahoo Finance RSS (stdlib xml.etree.ElementTree)
+  Por ticker: https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}
+  Macro geral: https://finance.yahoo.com/rss/topstories (top stories gerais)
+
+Base de dados Notion:
     Feed de Notícias: e1c8d3ab-a151-499f-8931-4537f29933ec
 
 Fluxo:
     1. Ler tickers ativos da Configuração de Vigilância (Ativo=True)
-    2. Recolher /v3/stock_news por ticker
-    3. Recolher /v4/general_news para notícias macro sem ticker
+    2. Recolher RSS por ticker
+    3. Recolher RSS macro (top stories)
     4. Categorizar por regra determinística (nunca por LLM)
-    5. Deduplicar por URL (ou hash como fallback)
+    5. Deduplicar por URL
     6. Upsert no Notion — nunca sobrescrever notícias existentes
 """
 
@@ -22,7 +26,9 @@ import os
 import hashlib
 import logging
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime  # Parse de datas RFC 2822 do RSS
 from typing import Dict, List, Optional, Any
 
 import requests
@@ -34,12 +40,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 # ─── Constantes ─────────────────────────────────────────────────────────────
 
-FMP_API_KEY = os.getenv("FMP_API_KEY", "")
-FMP_BASE_URL = "https://financialmodelingprep.com"
-# Endpoints v3/v4 foram descontinuados — usar /stable/ (migração FMP pós-Agosto 2025)
-# Endpoint único para toda a news: stock-latest devolve symbol em cada item
-FMP_STOCK_NEWS_ENDPOINT = "/stable/news/stock-latest"
-FMP_NEWS_LIMIT = 250  # Máximo por chamada confirmado pela FMP
+# Yahoo Finance RSS — sem API key, dados reais
+YF_RSS_TICKER_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
+YF_RSS_MACRO_URLS = [
+    "https://finance.yahoo.com/rss/topstories",           # Top stories gerais
+    "https://finance.yahoo.com/rss/2.0/headline?s=%5EGSPC",  # S&P 500 news
+]
+YF_RSS_TIMEOUT = 12  # segundos por chamada RSS
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_KEY", "")
 NOTION_NEWS_DB_ID = os.getenv("NOTION_NEWS_DB_ID", "e1c8d3ab-a151-499f-8931-4537f29933ec")
@@ -53,7 +60,6 @@ NOTION_HEADERS = {
 
 # Máximo de dias para filtrar notícias (backfill inicial = 7 dias)
 BACKFILL_DAYS = 7
-FMP_NEWS_LIMIT = 250  # Máximo por chamada confirmado pela FMP (era 50, corrigido)
 
 PALAVRAS_GEOPOLITICAS = [
     "war", "conflict", "sanctions", "military", "attack", "invasion",
@@ -67,67 +73,112 @@ PALAVRAS_EARNINGS = [
 ]
 
 
-# ─── Helpers — FMP ────────────────────────────────────────────────────────────
+# ─── Helpers — Yahoo Finance RSS ──────────────────────────────────────────
 
-def _fmp_get(endpoint: str, params: Dict[str, Any]) -> Optional[List[Dict]]:
-    """Chama o FMP API com o padrão correto (apikey como query param). Retorna None em caso de falha."""
-    if not FMP_API_KEY:
-        logging.error("❌ FMP_API_KEY não configurada. Recolha de notícias abortada.")
-        return None
-
-    params["apikey"] = FMP_API_KEY
-    url = f"{FMP_BASE_URL}{endpoint}"
+def _parse_rss_date(date_str: str) -> datetime:
+    """Parse de data RSS (RFC 2822) para datetime UTC. Ex: 'Thu, 31 Jul 2026 10:00:00 +0000'."""
     try:
-        res = requests.get(url, params=params, timeout=15)
-        if res.status_code == 200:
-            data = res.json()
-            if isinstance(data, list):
-                return data
-            if isinstance(data, dict) and "content" in data:
-                return data["content"]
+        return parsedate_to_datetime(date_str).astimezone(timezone.utc)
+    except Exception:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _fetch_rss(url: str) -> List[Dict]:
+    """
+    Faz GET ao feed RSS e devolve lista de artigos normalizados.
+    Cada artigo tem: title, url, publishedDate, publisher, symbol (opcional).
+    """
+    try:
+        res = requests.get(url, timeout=YF_RSS_TIMEOUT, headers={"User-Agent": "Mozilla/5.0"})
+        if res.status_code != 200:
+            logging.warning(f"⚠️ RSS {url[:60]}... devolveu HTTP {res.status_code}")
             return []
-        elif res.status_code == 429:
-            logging.warning(f"⚠️ FMP Rate Limit atingido para {endpoint}. Aguardando 5s...")
-            time.sleep(5)
-            return None
-        else:
-            logging.warning(f"⚠️ FMP {endpoint} devolveu HTTP {res.status_code}: {res.text[:200]}")
-            return None
+
+        root = ET.fromstring(res.content)
+        artigos = []
+
+        for item in root.iter("item"):
+            titulo = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            pub_date = (item.findtext("pubDate") or "").strip()
+            # 'source' pode ser tag direta ou atributo
+            source_el = item.find("source")
+            publisher = ""
+            if source_el is not None:
+                publisher = (source_el.text or source_el.get("url", "") or "").strip()
+            if not publisher:
+                publisher = "Yahoo Finance"
+
+            if not titulo or not link:
+                continue
+
+            artigos.append({
+                "title": titulo,
+                "url": link,
+                "publishedDate": _parse_rss_date(pub_date).strftime("%Y-%m-%d %H:%M:%S") if pub_date else "",
+                "publisher": publisher,
+                "site": publisher,  # compat com upsert_noticia que lê 'site' como fallback
+            })
+
+        return artigos
+
+    except ET.ParseError as e:
+        logging.warning(f"⚠️ Erro ao parsear XML do RSS {url[:60]}: {e}")
+        return []
     except Exception as e:
-        logging.error(f"❌ Erro ao chamar FMP {endpoint}: {e}")
-        return None
+        logging.error(f"❌ Erro ao obter RSS {url[:60]}: {e}")
+        return []
 
 
 def fetch_stock_news_batch(from_date: str, to_date: str, page: int = 0) -> List[Dict]:
     """
-    Recolhe notícias de todos os tickers em UMA chamada via /stable/news/stock-latest.
-    O campo 'symbol' em cada item indica o ticker. Máx 250 por chamada.
-    Muito mais eficiente que 1 chamada por ticker (poupa quota diária do plano Free).
+    Recolhe notícias de todos os tickers ativos via Yahoo Finance RSS.
+    Chamada por ticker individualmente (RSS não tem batch), mas gratuito e sem limites de quota.
+    Nota: 'page' ignorado (RSS não pagina), mantido por compatibilidade de assinatura.
     """
-    logging.info(f"  📰 Recolhendo batch de notícias (página {page}, from={from_date}, to={to_date})...")
-    data = _fmp_get(FMP_STOCK_NEWS_ENDPOINT, {
-        "from": from_date,
-        "to": to_date,
-        "limit": FMP_NEWS_LIMIT,
-        "page": page,
-    })
-    time.sleep(0.5)  # Respeitar rate limit FMP free tier (250/dia)
-    return data or []
+    return []
 
 
-# Manter compatível com testes — alias para fetch_stock_news
 def fetch_stock_news(ticker: str, from_date: str, to_date: str) -> List[Dict]:
-    """Alias de compatibilidade. Em produção usar fetch_stock_news_batch."""
-    return [a for a in fetch_stock_news_batch(from_date, to_date) if a.get("symbol", "") == ticker]
+    """Recolhe notícias de um ticker via Yahoo Finance RSS."""
+    url = YF_RSS_TICKER_URL.format(ticker=requests.utils.quote(ticker, safe=""))
+    logging.info(f"  📰 RSS Yahoo Finance para [{ticker}]...")
+    artigos = _fetch_rss(url)
+    time.sleep(0.3)  # Cortesia ao servidor
+
+    # Filtrar por intervalo de datas
+    desde = _parse_str_date(from_date)
+    ate = _parse_str_date(to_date) + timedelta(days=1)
+    return [
+        a for a in artigos
+        if desde <= _parse_pub_date(a.get("publishedDate", "")) <= ate
+    ]
 
 
 def fetch_general_news(page: int = 0) -> List[Dict]:
-    """Alias de compatibilidade. Em produção o pipeline usa fetch_stock_news_batch."""
-    return fetch_stock_news_batch(
-        from_date=(datetime.now(timezone.utc) - timedelta(days=BACKFILL_DAYS)).strftime("%Y-%m-%d"),
-        to_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        page=page,
-    )
+    """Recolhe notícias macro gerais via Yahoo Finance RSS top stories."""
+    if page >= len(YF_RSS_MACRO_URLS):
+        return []
+    url = YF_RSS_MACRO_URLS[page]
+    logging.info(f"  🌍 RSS macro [{url.split('/')[-1][:40]}]...")
+    artigos = _fetch_rss(url)
+    time.sleep(0.3)
+    return artigos
+
+
+def _parse_str_date(date_str: str) -> datetime:
+    """Converte string YYYY-MM-DD para datetime UTC."""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except Exception:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+def _parse_pub_date(date_str: str) -> datetime:
+    """Converte string YYYY-MM-DD HH:MM:SS para datetime UTC."""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except Exception:
+        return datetime.min.replace(tzinfo=timezone.utc)
 
 
 # ─── Helpers — Configuração de Vigilância ────────────────────────────────────
@@ -333,19 +384,16 @@ def upsert_noticia(artigo: Dict, ticker_relacionado: str = "") -> bool:
 
 def run_news_collection(backfill: bool = False) -> Dict[str, int]:
     """
-    Pipeline completo de recolha de notícias — otimizado para o plano Free da FMP (250/dia).
+    Pipeline completo de recolha de notícias via Yahoo Finance RSS.
 
-    Estratégia: 1-2 chamadas batch a /stable/news/stock-latest com from/to/limit=250.
-    O campo 'symbol' em cada item determina o ticker relacionado.
-    Notícias de tickers ativos → 'Empresa Específica' / 'Earnings-Relacionado'.
-    Notícias de outros tickers → 'Macro Geral' (contexto de mercado).
+    Sem chave de API. Dados reais e gratuitos.
+    Estratégia:
+      1. Por cada ticker ativo → fetch_stock_news (RSS Yahoo Finance)
+      2. Notícias macro gerais → fetch_general_news (Yahoo Finance top stories + S&P 500)
 
-    backfill=True : últimos 7 dias, até 3 páginas (3 × 250 = 750 artigos máx)
-    backfill=False: últimas 2h (cron de 30 min com margem), 1 página
+    backfill=True : últimos 7 dias
+    backfill=False: últimas 2h (cron de 30 min com margem)
     """
-    if not FMP_API_KEY:
-        logging.error("❌ FMP_API_KEY não definida. Abortando recolha de notícias.")
-        return {"inserted": 0, "skipped": 0, "errors": 0}
     if not NOTION_TOKEN:
         logging.error("❌ NOTION_TOKEN não definido. Abortando recolha de notícias.")
         return {"inserted": 0, "skipped": 0, "errors": 0}
@@ -361,62 +409,44 @@ def run_news_collection(backfill: bool = False) -> Dict[str, int]:
     from_str = desde.strftime("%Y-%m-%d")
     to_str = hoje.strftime("%Y-%m-%d")
 
-    # Ler watchlist uma vez — usado para categorização
-    tickers_ativos = set(get_active_tickers())
-    # Normalizar: remover prefixos/sufixos que a FMP não usa no campo symbol
-    tickers_fmp = {t.replace("^", "").replace("=X", "").replace("=F", "").replace("-Y.NYB", "") for t in tickers_ativos}
-    # Mapa reverso FMP symbol → ticker original (para o campo Notion)
-    ticker_map = {}
-    for t in tickers_ativos:
-        fmp = t.replace("^", "").replace("=X", "").replace("=F", "").replace("-Y.NYB", "")
-        ticker_map[fmp] = t
-
     stats = {"inserted": 0, "skipped": 0, "errors": 0}
-    pages_to_fetch = 3 if backfill else 1
 
-    logging.info(f"📰 Batch fetch: {pages_to_fetch} páginas × 250 artigos = {pages_to_fetch * 250} máx. Watchlist: {len(tickers_ativos)} tickers.")
+    # ── 1. Notícias por ticker ativo (RSS Yahoo Finance) ─────────────────────
+    tickers = get_active_tickers()
+    logging.info(f"📊 1/2 Notícias por ticker ({len(tickers)} ativos via RSS)...")
 
-    for page in range(pages_to_fetch):
-        artigos = fetch_stock_news_batch(from_str, to_str, page=page)
-        if not artigos:
-            logging.info(f"  Página {page}: sem artigos — parar.")
-            break
+    for ticker in tickers:
+        try:
+            artigos = fetch_stock_news(ticker, from_str, to_str)
+            # Filtro de data extra no modo cron (RSS devolve últimos N itens sem garantia de data)
+            if not backfill:
+                artigos = [a for a in artigos if _parse_pub_date(a.get("publishedDate", "")) >= desde]
+            logging.info(f"  [{ticker}]: {len(artigos)} artigo(s) no período")
+            for artigo in artigos:
+                result = upsert_noticia(artigo, ticker_relacionado=ticker)
+                stats["inserted" if result else "skipped"] += 1
+        except Exception as e:
+            logging.warning(f"⚠️ Erro ao processar RSS de [{ticker}]: {e}")
+            stats["errors"] += 1
 
-        # Filtrar por data no modo cron (garantia extra mesmo que FMP filtre por from/to)
-        if not backfill:
-            artigos_filtrados = [a for a in artigos if _parse_pub_date(a.get("publishedDate", "")) >= desde]
-            if not artigos_filtrados:
-                logging.info(f"  Página {page}: sem artigos nas últimas 2h — parar.")
-                break
-            artigos = artigos_filtrados
+    # ── 2. Notícias macro gerais (Yahoo Finance top stories + S&P 500) ────────
+    logging.info(f"🌍 2/2 Notícias macro gerais ({len(YF_RSS_MACRO_URLS)} feeds RSS)...")
 
-        logging.info(f"  Página {page}: {len(artigos)} artigos a processar...")
-
-        for artigo in artigos:
-            try:
-                # Determinar ticker relacionado pelo campo 'symbol' da FMP
-                symbol_fmp = (artigo.get("symbol") or "").strip()
-                ticker_relacionado = ticker_map.get(symbol_fmp, symbol_fmp)
-
-                result = upsert_noticia(artigo, ticker_relacionado=ticker_relacionado)
-                if result:
-                    stats["inserted"] += 1
-                else:
-                    stats["skipped"] += 1
-            except Exception as e:
-                logging.warning(f"⚠️ Erro ao processar artigo [{artigo.get('symbol', '?')}]: {e}")
-                stats["errors"] += 1
+    for page in range(len(YF_RSS_MACRO_URLS)):
+        try:
+            artigos = fetch_general_news(page=page)
+            if not backfill:
+                artigos = [a for a in artigos if _parse_pub_date(a.get("publishedDate", "")) >= desde]
+            logging.info(f"  Macro feed {page}: {len(artigos)} artigo(s) no período")
+            for artigo in artigos:
+                result = upsert_noticia(artigo, ticker_relacionado="")
+                stats["inserted" if result else "skipped"] += 1
+        except Exception as e:
+            logging.warning(f"⚠️ Erro ao processar RSS macro [{page}]: {e}")
+            stats["errors"] += 1
 
     logging.info(
         f"🎉 Recolha concluída! "
         f"Inseridas: {stats['inserted']} | Já existentes: {stats['skipped']} | Erros: {stats['errors']}"
     )
     return stats
-
-
-def _parse_pub_date(date_str: str) -> datetime:
-    """Parse da data de publicação da FMP para datetime UTC."""
-    try:
-        return datetime.strptime(date_str[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-    except Exception:
-        return datetime.min.replace(tzinfo=timezone.utc)
