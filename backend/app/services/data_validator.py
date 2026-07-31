@@ -274,85 +274,89 @@ def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: 
     """
     ts = str(data)[:10] + " 00:00:00" if len(str(data)) <= 10 else str(data)
     
-    with engine.connect() as conn:
-        trans = conn.begin()
-        try:
-            cat_row = conn.execute(text("SELECT id FROM indicators_catalog WHERE ticker = :ticker LIMIT 1"), {"ticker": ticker}).fetchone()
-            if not cat_row:
-                trans.rollback()
-                return {"status": "error", "message": f"Ticker {ticker} não encontrado no catálogo."}
-            indicator_id = cat_row[0]
+    try:
+        with engine.connect() as conn:
+            trans = conn.begin()
+            try:
+                cat_row = conn.execute(text("SELECT id FROM indicators_catalog WHERE ticker = :ticker LIMIT 1"), {"ticker": ticker}).fetchone()
+                if not cat_row:
+                    trans.rollback()
+                    return {"status": "error", "message": f"Ticker {ticker} não encontrado no catálogo."}
+                indicator_id = cat_row[0]
 
-            query_prod = text("SELECT id, open_val, high_val, low_val, value, volume FROM indicator_values WHERE symbol = :symbol AND timestamp = :ts")
-            existing = conn.execute(query_prod, {"symbol": ticker, "ts": ts}).fetchone()
+                query_prod = text("SELECT id, open_val, high_val, low_val, value, volume FROM indicator_values WHERE symbol = :symbol AND timestamp = :ts")
+                existing = conn.execute(query_prod, {"symbol": ticker, "ts": ts}).fetchone()
 
-            if existing:
-                ext_id, ext_open, ext_high, ext_low, ext_val, ext_vol = existing
-                
-                # Regra 1: Open NUNCA muda
-                # Regra 2: High é o máximo
-                high_final = max(float(ext_high if ext_high is not None else novo_high), float(novo_high))
-                # Regra 3: Low é o mínimo
-                ext_low_f = float(ext_low) if ext_low is not None else 0.0
-                novo_low_f = float(novo_low)
-                if ext_low_f > 0 and novo_low_f > 0:
-                    low_final = min(ext_low_f, novo_low_f)
+                if existing:
+                    ext_id, ext_open, ext_high, ext_low, ext_val, ext_vol = existing
+                    
+                    # Regra 1: Open NUNCA muda
+                    # Regra 2: High é o máximo
+                    high_final = max(float(ext_high if ext_high is not None else novo_high), float(novo_high))
+                    # Regra 3: Low é o mínimo
+                    ext_low_f = float(ext_low) if ext_low is not None else 0.0
+                    novo_low_f = float(novo_low)
+                    if ext_low_f > 0 and novo_low_f > 0:
+                        low_final = min(ext_low_f, novo_low_f)
+                    else:
+                        low_final = novo_low_f if novo_low_f > 0 else ext_low_f
+                    # Regra 4: Close é o mais recente
+                    close_final = float(novo_close)
+                    # Volume é o máximo
+                    vol_final = max(int(ext_vol or 0), int(volume or 0))
+
+                    sql_update = text("""
+                        UPDATE indicator_values 
+                        SET value = :value, high_val = :high_val, low_val = :low_val, volume = :volume
+                        WHERE id = :id
+                    """)
+                    conn.execute(sql_update, {
+                        "id": ext_id,
+                        "value": close_final,
+                        "high_val": high_final,
+                        "low_val": low_final,
+                        "volume": vol_final
+                    })
+                    trans.commit()
+                    auto_resolve_anomalies("indicator_values", ticker)
+                    return {
+                        "status": "updated",
+                        "open_val": float(ext_open if ext_open is not None else novo_open),
+                        "high_val": high_final,
+                        "low_val": low_final,
+                        "value": close_final,
+                        "volume": vol_final
+                    }
                 else:
-                    low_final = novo_low_f if novo_low_f > 0 else ext_low_f
-                # Regra 4: Close é o mais recente
-                close_final = float(novo_close)
-                # Volume é o máximo
-                vol_final = max(int(ext_vol or 0), int(volume or 0))
-
-                sql_update = text("""
-                    UPDATE indicator_values 
-                    SET value = :value, high_val = :high_val, low_val = :low_val, volume = :volume
-                    WHERE id = :id
-                """)
-                conn.execute(sql_update, {
-                    "id": ext_id,
-                    "value": close_final,
-                    "high_val": high_final,
-                    "low_val": low_final,
-                    "volume": vol_final
-                })
-                trans.commit()
-                auto_resolve_anomalies("indicator_values", ticker)
-                return {
-                    "status": "updated",
-                    "open_val": float(ext_open if ext_open is not None else novo_open),
-                    "high_val": high_final,
-                    "low_val": low_final,
-                    "value": close_final,
-                    "volume": vol_final
-                }
-            else:
-                sql_insert = text("""
-                    INSERT INTO indicator_values 
-                    (indicator_id, symbol, timestamp, value, open_val, high_val, low_val, volume)
-                    VALUES (:indicator_id, :symbol, :ts, :value, :open_val, :high_val, :low_val, :volume)
-                """)
-                conn.execute(sql_insert, {
-                    "indicator_id": indicator_id,
-                    "symbol": ticker,
-                    "ts": ts,
-                    "value": float(novo_close),
-                    "open_val": float(novo_open),
-                    "high_val": float(novo_high),
-                    "low_val": float(novo_low),
-                    "volume": int(volume or 0)
-                })
-                trans.commit()
-                auto_resolve_anomalies("indicator_values", ticker)
-                return {
-                    "status": "inserted",
-                    "open_val": float(novo_open),
-                    "high_val": float(novo_high),
-                    "low_val": float(novo_low),
-                    "value": float(novo_close),
-                    "volume": int(volume or 0)
-                }
-        except Exception as e:
-            trans.rollback()
-            logging.error(f"Erro ao promover {ticker} para produção: {e}")
-            return {"status": "error", "message": str(e)}
+                    sql_insert = text("""
+                        INSERT INTO indicator_values 
+                        (indicator_id, symbol, timestamp, value, open_val, high_val, low_val, volume)
+                        VALUES (:indicator_id, :symbol, :ts, :value, :open_val, :high_val, :low_val, :volume)
+                    """)
+                    conn.execute(sql_insert, {
+                        "indicator_id": indicator_id,
+                        "symbol": ticker,
+                        "ts": ts,
+                        "value": float(novo_close),
+                        "open_val": float(novo_open),
+                        "high_val": float(novo_high),
+                        "low_val": float(novo_low),
+                        "volume": int(volume or 0)
+                    })
+                    trans.commit()
+                    auto_resolve_anomalies("indicator_values", ticker)
+                    return {
+                        "status": "inserted",
+                        "open_val": float(novo_open),
+                        "high_val": float(novo_high),
+                        "low_val": float(novo_low),
+                        "value": float(novo_close),
+                        "volume": int(volume or 0)
+                    }
+            except Exception as e:
+                trans.rollback()
+                logging.error(f"Erro ao promover {ticker} para produção: {e}")
+                return {"status": "error", "message": str(e)}
+    except Exception as e:
+        logging.error(f"Erro de conexão ao promover {ticker} para produção: {e}")
+        return {"status": "error", "message": str(e)}
