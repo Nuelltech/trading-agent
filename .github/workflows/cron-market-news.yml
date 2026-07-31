@@ -1,0 +1,54 @@
+name: Cron - Feed de Notícias de Mercado (FMP → Notion)
+
+on:
+  schedule:
+    # A cada 30 minutos, dias úteis (Seg-Sex) — alinhado com cron-notion-sync.yml
+    - cron: '*/30 * * * 1-5'
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: 'Modo backfill — recolhe os últimos 7 dias'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  fetch-market-news:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pymysql sqlalchemy cryptography pydantic pydantic-settings
+
+      - name: Recolher Feed de Notícias de Mercado
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN || secrets.NOTION_API_KEY }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_CONFIG_DB_ID: ${{ secrets.NOTION_CONFIG_DB_ID }}
+          NOTION_NEWS_DB_ID: ${{ secrets.NOTION_NEWS_DB_ID }}
+          MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
+          MYSQL_PORT: ${{ secrets.MYSQL_PORT || '3306' }}
+          MYSQL_USER: ${{ secrets.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
+        run: |
+          if [ "${{ github.event.inputs.backfill }}" = "true" ]; then
+            python scripts/fetch_market_news.py --backfill
+          else
+            python scripts/fetch_market_news.py
+          fi
