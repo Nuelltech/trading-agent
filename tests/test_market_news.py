@@ -57,6 +57,8 @@ class TestDetecaoTickers(unittest.TestCase):
             "AAPL": "Apple",
             "^GSPC": "S&P 500",
             "^VIX": "VIX",
+            "^SOX": "Semiconductor",
+            "GC=F": "Gold",
         }
 
     def test_deteta_nasdaq_e_coinbase_no_titulo(self):
@@ -72,10 +74,24 @@ class TestDetecaoTickers(unittest.TestCase):
         mencionados = detetar_tickers_mencionados(titulo, self.watchlist_map)
         self.assertEqual(mencionados, ["AAPL"])
 
+    def test_deteta_sox_em_chip_stocks_com_resumo(self):
+        from app.services.news_collector import detetar_tickers_mencionados
+        texto = "Chip Stocks Are on Pace for Worst Month. The Philadelphia Semiconductor Index (SOX) dropped 4% today."
+        mencionados = detetar_tickers_mencionados(texto, self.watchlist_map)
+        self.assertIn("^SOX", mencionados)
+        self.assertNotIn("^GSPC", mencionados)
+
+    def test_deteta_gold_e_tether(self):
+        from app.services.news_collector import detetar_tickers_mencionados
+        texto = "Tether adds 14 tons of gold to its reserves in Q3"
+        mencionados = detetar_tickers_mencionados(texto, self.watchlist_map)
+        self.assertIn("GC=F", mencionados)
+        self.assertIn("COIN", mencionados)
+
     def test_titulo_sem_tickers_devolve_lista_vazia(self):
         from app.services.news_collector import detetar_tickers_mencionados
-        titulo = "Federal Reserve keeps interest rates unchanged at 5.25%"
-        mencionados = detetar_tickers_mencionados(titulo, self.watchlist_map)
+        texto = "Federal Reserve keeps interest rates unchanged at 5.25%"
+        mencionados = detetar_tickers_mencionados(texto, self.watchlist_map)
         self.assertEqual(mencionados, [])
 
 

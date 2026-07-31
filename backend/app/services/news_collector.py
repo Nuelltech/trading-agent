@@ -16,8 +16,9 @@ Base de dados Notion:
 Melhorias & Correções Aplicadas:
     1. Filtro de exclusão de ruído (finanças pessoais: mortgage rates, HELOC, etc.)
     2. Categorização determinística refinada (Earnings, Geopolítico, Empresa Específica, Macro Geral)
-    3. Detecção mecânica de tickers no título por correspondência de texto
-    4. Extração mecânica de meta-descrição (zero LLM / BeautifulSoup) com falha tolerante
+    3. Tagging determinístico de tickers examinando TÍTULO + META-DESCRIÇÃO com mapa expandido de aliases
+    4. Remoção da associação forçada de ^GSPC em notícias de feeds genéricos/índice
+    5. Extração mecânica de meta-descrição (zero LLM / BeautifulSoup) com falha tolerante
 """
 
 import os
@@ -48,8 +49,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # Yahoo Finance RSS — sem API key, dados reais
 YF_RSS_TICKER_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
 YF_RSS_MACRO_URLS = [
-    "https://finance.yahoo.com/rss/topstories",             # Top stories gerais
-    "https://finance.yahoo.com/rss/2.0/headline?s=%5EGSPC",    # S&P 500 news
+    "https://finance.yahoo.com/rss/topstories",  # Top stories gerais
 ]
 YF_RSS_TIMEOUT = 12  # segundos por chamada RSS
 
@@ -85,7 +85,7 @@ PALAVRAS_EARNINGS = [
     "quarterly", "beat", "miss", "outlook", "forecast"
 ]
 
-# Nomes de fallback para tickers comuns para correspondência de texto
+# Nomes de fallback e aliases expandidos para correspondência de texto em títulos e resumos
 DEFAULT_TICKER_NAMES = {
     "^NDX": "Nasdaq",
     "^GSPC": "S&P 500",
@@ -112,6 +112,33 @@ DEFAULT_TICKER_NAMES = {
     "META": "Meta",
 }
 
+# Mapa de aliases por palavras-chave para correspondência determinística
+TICKER_KEYWORD_ALIASES: Dict[str, List[str]] = {
+    "^NDX": ["nasdaq", "ndx", "tech stocks", "qqq"],
+    "^GSPC": ["s&p", "s&p 500", "sp500", "sp 500", "gspc"],
+    "^VIX": ["vix", "volatility index", "fear index"],
+    "^SOX": ["sox", "semiconductor", "semiconductors", "chip stocks", "chips", "phlx semiconductor"],
+    "^STOXX50E": ["stoxx", "euro stoxx", "stoxx 50", "european stocks"],
+    "^TNX": ["10-year yield", "10-year treasury", "treasury yield", "spiking yields", "spiking yield", "10-yr yield"],
+    "DGS2": ["2-year yield", "2-year treasury", "2-yr yield"],
+    "TLT": ["tlt", "treasury bond", "treasury bonds", "bond market", "bond yields"],
+    "GC=F": ["gold", "ouro", "bullion"],
+    "BZ=F": ["brent", "crude oil", "oil prices", "oil price", "petróleo"],
+    "HG=F": ["copper", "cobre"],
+    "EURUSD=X": ["eur/usd", "eurusd", "euro dollar"],
+    "USDJPY=X": ["usd/jpy", "usdjpy", "yen"],
+    "O": ["realty income"],
+    "DX-Y.NYB": ["dollar index", "dxy", "us dollar index"],
+    "COIN": ["coinbase", "tether", "crypto", "bitcoin", "btc"],
+    "AAPL": ["apple", "iphone"],
+    "MSFT": ["microsoft", "azure"],
+    "NVDA": ["nvidia", "nvda"],
+    "TSLA": ["tesla", "elon musk", "spacex"],
+    "AMZN": ["amazon", "aws"],
+    "GOOGL": ["google", "alphabet"],
+    "META": ["meta", "facebook", "instagram"],
+}
+
 
 # ─── Helpers — Filtro de Ruído & Extração ──────────────────────────────────
 
@@ -126,30 +153,42 @@ def eh_conteudo_irrelevante(titulo: str) -> bool:
     return any(palavra in titulo_lower for palavra in PALAVRAS_EXCLUSAO)
 
 
-def detetar_tickers_mencionados(titulo: str, watchlist_map: Dict[str, str]) -> List[str]:
+def detetar_tickers_mencionados(texto: str, watchlist_map: Dict[str, str]) -> List[str]:
     """
-    Verifica no título quais tickers/nomes da nossa Configuração de Vigilância aparecem mencionados.
+    Verifica no texto (título + meta-descrição) quais tickers/nomes/aliases da nossa
+    Configuração de Vigilância aparecem mencionados.
     Correspondência de texto determinística.
     """
-    if not titulo:
+    if not texto:
         return []
-    titulo_lower = titulo.lower()
+    texto_lower = texto.lower()
     mencionados = []
 
     for ticker, nome_empresa in watchlist_map.items():
-        # Match pelo nome da empresa (ex: "Nasdaq", "Coinbase", "Apple")
-        if nome_empresa and len(nome_empresa.strip()) >= 3 and nome_empresa.lower() in titulo_lower:
-            if ticker not in mencionados:
-                mencionados.append(ticker)
-            continue
+        matched = False
 
-        # Match pelo símbolo do ticker limpo (ex: NDX, AAPL, COIN, VIX, TLT)
-        ticker_clean = ticker.strip("^").replace("=X", "").replace("=F", "").replace("-Y.NYB", "")
-        if ticker_clean and len(ticker_clean) >= 2:
-            pattern = r'\b' + re.escape(ticker_clean) + r'\b'
-            if re.search(pattern, titulo, re.IGNORECASE):
-                if ticker not in mencionados:
-                    mencionados.append(ticker)
+        # 1. Match por aliases configurados (ex: "chip stocks", "sox", "gold", "10-year yield", "nasdaq")
+        aliases = TICKER_KEYWORD_ALIASES.get(ticker, [])
+        for alias in aliases:
+            if alias in texto_lower:
+                matched = True
+                break
+
+        # 2. Match pelo nome da empresa vindo da tabela Notion (se >= 3 chars)
+        if not matched and nome_empresa and len(nome_empresa.strip()) >= 3:
+            if nome_empresa.lower() in texto_lower:
+                matched = True
+
+        # 3. Match pelo símbolo do ticker limpo (ex: NDX, AAPL, COIN, VIX, TLT)
+        if not matched:
+            ticker_clean = ticker.strip("^").replace("=X", "").replace("=F", "").replace("-Y.NYB", "")
+            if ticker_clean and len(ticker_clean) >= 3:
+                pattern = r'\b' + re.escape(ticker_clean) + r'\b'
+                if re.search(pattern, texto, re.IGNORECASE):
+                    matched = True
+
+        if matched and ticker not in mencionados:
+            mencionados.append(ticker)
 
     return mencionados
 
@@ -463,7 +502,7 @@ def upsert_noticia(
 ) -> bool:
     """
     Insere uma notícia no Notion se ainda não existir (deduplicação por ID Fonte Externa).
-    Aplica filtro de ruído (finanças pessoais), tagging por correspondência de texto
+    Aplica filtro de ruído (finanças pessoais), tagging por correspondência de texto no título + resumo,
     e extração tolerante a falhas de meta-descrição.
     """
     titulo = (artigo.get("title") or "").strip()
@@ -491,13 +530,25 @@ def upsert_noticia(
         logging.debug(f"  ⏭️ Já existe no Notion: [{titulo[:50]}]")
         return False
 
-    # ── Tagging (Problema 3): Detetar Tickers Mencionados no Título ────────────
+    # ── Extração Mecânica de Substância (Meta-Descrição) ─────────────────────
+    resumo_meta = None
+    if url_artigo:
+        resumo_meta = extrair_resumo_mecanico(url_artigo)
+
+    # Texto completo para análise de tagging (título + resumo)
+    texto_completo = f"{titulo}. {resumo_meta or ''}"
+
+    # ── Tagging (Problema 3): Detetar Tickers Mencionados no Título e Resumo ────
     if watchlist_map is None:
         watchlist_map = DEFAULT_TICKER_NAMES
 
-    mencionados = detetar_tickers_mencionados(titulo, watchlist_map)
-    if ticker_relacionado and ticker_relacionado not in mencionados:
-        mencionados.insert(0, ticker_relacionado)
+    mencionados = detetar_tickers_mencionados(texto_completo, watchlist_map)
+
+    # Se a notícia veio de um pedido de RSS de ticker específico (e NÃO de um índice genérico como ^GSPC),
+    # adiciona o ticker de contexto apenas se não foi detetado nada ou se é um ticker de empresa real
+    if ticker_relacionado and ticker_relacionado not in ["^GSPC", "^GSPC_MACRO", ""]:
+        if ticker_relacionado not in mencionados:
+            mencionados.insert(0, ticker_relacionado)
 
     ticker_relacionado_str = ", ".join(mencionados)
 
@@ -517,12 +568,6 @@ def upsert_noticia(
     sentimento_raw = artigo.get("sentiment") or artigo.get("overallSentiment") or ""
     sentimento_map = {"Positive": "Positivo", "Negative": "Negativo", "Neutral": "Neutro"}
     sentimento = sentimento_map.get(sentimento_raw, "Não Fornecido")
-
-    # ── Extração Mecânica de Substância (Meta-Descrição) ─────────────────────
-    # Performance: extrair apenas se tem URL e ticker relacionado (notícia relevante)
-    resumo_meta = None
-    if url_artigo and ticker_relacionado_str:
-        resumo_meta = extrair_resumo_mecanico(url_artigo)
 
     # ── Build Notion properties ───────────────────────────────────────────────
     notion_props: Dict[str, Any] = {
