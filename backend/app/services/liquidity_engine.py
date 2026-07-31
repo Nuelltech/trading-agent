@@ -127,8 +127,8 @@ def analyze_liquidity_sweeps(symbol: str, df: pd.DataFrame, k_factor: float = 1.
     consumed_highs = set()
     consumed_lows = set()
     
-    # Avaliar as últimas sessões em busca de Sweeps
-    for i in range(60, len(df)):
+    # Avaliar as últimas sessões em busca de Sweeps (a partir de i=14 com ATR14/60 disponível)
+    for i in range(14, len(df)):
         current = df.iloc[i]
         timestamp = str(current['timestamp'])
         open_val = float(current['open'])
