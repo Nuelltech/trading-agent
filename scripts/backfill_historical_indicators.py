@@ -87,13 +87,18 @@ YFINANCE_BACKFILL_MAP = {
     "^KS11":     {"multiplier": 1.0},
     "^AXJO":     {"multiplier": 1.0},
     
-    # Equities
+    # Equities & ETFs
+    "TLT":       {"multiplier": 1.0},
     "O":         {"multiplier": 1.0},
     "DAL":       {"multiplier": 1.0},
     "F":         {"multiplier": 1.0},
     "ENPH":      {"multiplier": 1.0},
     "NKE":       {"multiplier": 1.0},
     "STLA":      {"multiplier": 1.0},
+}
+
+YFINANCE_SYMBOL_OVERRIDE = {
+    "USDCNH=X": "USDCNY=X",
 }
 
 FRED_BACKFILL_MAP = {
@@ -141,11 +146,13 @@ def backfill_mysql_indicators() -> Dict[str, int]:
             continue
 
         try:
-            df = yf.Ticker(ticker).history(period="90d")
+            yf_symbol = YFINANCE_SYMBOL_OVERRIDE.get(ticker, ticker)
+            df = yf.Ticker(yf_symbol).history(period="120d")
             if df.empty:
                 continue
 
             df_sess = df.tail(LOOKBACK_SESSIONS)
+
 
             with engine.connect() as conn:
                 trans = conn.begin()

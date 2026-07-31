@@ -29,7 +29,8 @@ PLAUSIBILITY_LIMITS = {
     "BZ=F": {"min": 30.0, "max": 150.0},
     "HG=F": {"min": 2.0, "max": 10.0},
     "^GSPC": {"min": 2000.0, "max": 10000.0},
-    "^NDX": {"min": 5000.0, "max": 30000.0},
+    "^NDX": {"min": 5000.0, "max": 40000.0},
+
     "^STOXX50E": {"min": 2000.0, "max": 8000.0},
     "^GDAXI": {"min": 8000.0, "max": 30000.0},
     "DX-Y.NYB": {"min": 80.0, "max": 120.0},
