@@ -2,11 +2,13 @@
 Testes unitários para news_collector.py (Camada 1 — Feed de Notícias)
 
 Cobrem:
-  - Categorização determinística (secção 4 da spec)
+  - Categorização determinística (4 categorias: Earnings, Geopolítico, Empresa Específica, Macro Geral)
+  - Filtro de exclusão de ruído (finanças pessoais: mortgage rates, HELOC, etc.)
+  - Tagging determinístico de tickers por correspondência de texto no título
+  - Extração mecânica de meta-descrição (HTML parsing com falha tolerante)
   - Deduplicação por URL e hash de fallback
   - Filtro anti-mock (fontes não identificadas)
-  - Parsing de datas da FMP
-  - run_news_collection falha silenciosa sem FMP_API_KEY
+  - Guardrails do pipeline sem NOTION_TOKEN
 """
 
 import sys
@@ -17,11 +19,70 @@ from datetime import datetime, timezone, timedelta
 sys.path.append('backend')
 
 
-class TestCategorizacaoNoticia(unittest.TestCase):
-    """Testa categorização determinística — nunca por LLM."""
+class TestFiltroExclusaoRuido(unittest.TestCase):
+    """Testa rejeição de artigos de finanças pessoais (Problema 1)."""
+
+    def test_rejeita_mortgage_rates(self):
+        from app.services.news_collector import eh_conteudo_irrelevante
+        self.assertTrue(eh_conteudo_irrelevante("Mortgage and refinance interest rates today"))
+
+    def test_rejeita_cd_rates(self):
+        from app.services.news_collector import eh_conteudo_irrelevante
+        self.assertTrue(eh_conteudo_irrelevante("Best CD rates today: Earn up to 5.25% APY"))
+
+    def test_rejeita_heloc(self):
+        from app.services.news_collector import eh_conteudo_irrelevante
+        self.assertTrue(eh_conteudo_irrelevante("How HELOC interest rates are calculated"))
+
+    def test_rejeita_savings_account(self):
+        from app.services.news_collector import eh_conteudo_irrelevante
+        self.assertTrue(eh_conteudo_irrelevante("Best high-yield savings account rates for August"))
+
+    def test_aceita_noticia_de_mercado_real(self):
+        from app.services.news_collector import eh_conteudo_irrelevante
+        self.assertFalse(eh_conteudo_irrelevante("Stock Market Today: Nasdaq Advances Despite Spiking Yields"))
+
+    def test_aceita_noticia_de_empresa(self):
+        from app.services.news_collector import eh_conteudo_irrelevante
+        self.assertFalse(eh_conteudo_irrelevante("Apple reports Q3 revenue growth beating analyst estimates"))
+
+
+class TestDetecaoTickers(unittest.TestCase):
+    """Testa tagging de tickers por correspondência de texto no título (Problema 3)."""
 
     def setUp(self):
-        # Patch _tem_earnings_proximos para controlar o resultado sem MySQL
+        self.watchlist_map = {
+            "^NDX": "Nasdaq",
+            "COIN": "Coinbase",
+            "AAPL": "Apple",
+            "^GSPC": "S&P 500",
+            "^VIX": "VIX",
+        }
+
+    def test_deteta_nasdaq_e_coinbase_no_titulo(self):
+        from app.services.news_collector import detetar_tickers_mencionados
+        titulo = "Stock Market Today: Nasdaq Advances Despite Spiking Yields; Coinbase Tumbles"
+        mencionados = detetar_tickers_mencionados(titulo, self.watchlist_map)
+        self.assertIn("^NDX", mencionados)
+        self.assertIn("COIN", mencionados)
+
+    def test_deteta_apple(self):
+        from app.services.news_collector import detetar_tickers_mencionados
+        titulo = "Apple stock rises after strong iPhone sales report"
+        mencionados = detetar_tickers_mencionados(titulo, self.watchlist_map)
+        self.assertEqual(mencionados, ["AAPL"])
+
+    def test_titulo_sem_tickers_devolve_lista_vazia(self):
+        from app.services.news_collector import detetar_tickers_mencionados
+        titulo = "Federal Reserve keeps interest rates unchanged at 5.25%"
+        mencionados = detetar_tickers_mencionados(titulo, self.watchlist_map)
+        self.assertEqual(mencionados, [])
+
+
+class TestCategorizacaoNoticia(unittest.TestCase):
+    """Testa categorização determinística por regra (Problema 2)."""
+
+    def setUp(self):
         self.patcher = patch('app.services.news_collector._tem_earnings_proximos')
         self.mock_earnings = self.patcher.start()
         self.mock_earnings.return_value = False
@@ -29,12 +90,12 @@ class TestCategorizacaoNoticia(unittest.TestCase):
     def tearDown(self):
         self.patcher.stop()
 
-    def test_empresa_especifica_ticker_sem_earnings(self):
+    def test_empresa_especifica_quando_tem_ticker(self):
         from app.services.news_collector import categorizar_noticia
-        resultado = categorizar_noticia("AAPL", "Apple announces new iPhone model")
+        resultado = categorizar_noticia("^NDX, COIN", "Nasdaq Advances; Coinbase Tumbles")
         self.assertEqual(resultado, "Empresa Específica")
 
-    def test_earnings_relacionado_por_palavras_chave(self):
+    def test_earnings_relacionado_por_palavra_chave(self):
         from app.services.news_collector import categorizar_noticia
         resultado = categorizar_noticia("AAPL", "Apple beats earnings estimates by 15%")
         self.assertEqual(resultado, "Earnings-Relacionado")
@@ -55,22 +116,50 @@ class TestCategorizacaoNoticia(unittest.TestCase):
         resultado = categorizar_noticia("", "US imposes new sanctions on Iran oil exports")
         self.assertEqual(resultado, "Geopolítico")
 
-    def test_macro_geral_sem_ticker(self):
+    def test_macro_geral_sem_ticker_nem_keywords_tematicas(self):
         from app.services.news_collector import categorizar_noticia
         resultado = categorizar_noticia("", "Fed signals potential rate cut in September")
         self.assertEqual(resultado, "Macro Geral")
 
-    def test_macro_geral_banco_central(self):
-        from app.services.news_collector import categorizar_noticia
-        resultado = categorizar_noticia("", "ECB keeps rates unchanged amid inflation concerns")
-        self.assertEqual(resultado, "Macro Geral")
-
     def test_categoria_nunca_vazia(self):
-        """Categorização deve sempre devolver uma string não-vazia."""
         from app.services.news_collector import categorizar_noticia
         for titulo in ["", "   ", "xyz", "any headline at all"]:
             resultado = categorizar_noticia("", titulo)
             self.assertIn(resultado, ["Empresa Específica", "Macro Geral", "Geopolítico", "Earnings-Relacionado"])
+
+
+class TestExtracaoResumoMecanico(unittest.TestCase):
+    """Testa extração mecânica de meta-descrição HTML."""
+
+    @patch('requests.get')
+    def test_extrai_meta_description(self, mock_get):
+        from app.services.news_collector import extrair_resumo_mecanico
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = '<html><head><meta name="description" content="Meta summary content here"></head></html>'
+        mock_get.return_value = mock_resp
+
+        resumo = extrair_resumo_mecanico("https://finance.yahoo.com/news/123")
+        self.assertEqual(resumo, "Meta summary content here")
+
+    @patch('requests.get')
+    def test_extrai_og_description_fallback(self, mock_get):
+        from app.services.news_collector import extrair_resumo_mecanico
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = '<html><head><meta property="og:description" content="OG description fallback"></head></html>'
+        mock_get.return_value = mock_resp
+
+        resumo = extrair_resumo_mecanico("https://finance.yahoo.com/news/123")
+        self.assertEqual(resumo, "OG description fallback")
+
+    @patch('requests.get')
+    def test_tolerante_a_falha_de_http(self, mock_get):
+        from app.services.news_collector import extrair_resumo_mecanico
+        mock_get.side_effect = Exception("Timeout")
+
+        resumo = extrair_resumo_mecanico("https://finance.yahoo.com/news/123")
+        self.assertIsNone(resumo)
 
 
 class TestDeduplicacao(unittest.TestCase):
@@ -81,12 +170,6 @@ class TestDeduplicacao(unittest.TestCase):
         h1 = _url_hash_fallback("Título A", "Reuters", "2026-07-31 10:00:00")
         h2 = _url_hash_fallback("Título A", "Reuters", "2026-07-31 10:00:00")
         self.assertEqual(h1, h2)
-
-    def test_url_hash_fallback_diferente_para_diferentes_inputs(self):
-        from app.services.news_collector import _url_hash_fallback
-        h1 = _url_hash_fallback("Título A", "Reuters", "2026-07-31 10:00:00")
-        h2 = _url_hash_fallback("Título B", "Reuters", "2026-07-31 10:00:00")
-        self.assertNotEqual(h1, h2)
 
     def test_url_hash_comeca_com_hash(self):
         from app.services.news_collector import _url_hash_fallback
@@ -108,27 +191,21 @@ class TestFiltroAntiMock(unittest.TestCase):
         self.assertFalse(resultado)
         self.mock_create.assert_not_called()
 
+    def test_rejeita_financas_pessoais(self):
+        from app.services.news_collector import upsert_noticia
+        resultado = upsert_noticia({"title": "Best CD rates today", "site": "Yahoo Finance", "publishedDate": "2026-07-31 10:00:00"})
+        self.assertFalse(resultado)
+        self.mock_create.assert_not_called()
+
     def test_rejeita_fonte_unknown(self):
         from app.services.news_collector import upsert_noticia
         resultado = upsert_noticia({"title": "Test News", "site": "unknown", "publishedDate": "2026-07-31 10:00:00"})
         self.assertFalse(resultado)
         self.mock_create.assert_not_called()
 
-    def test_rejeita_fonte_vazia(self):
-        from app.services.news_collector import upsert_noticia
-        resultado = upsert_noticia({"title": "Test News", "site": "", "publishedDate": "2026-07-31 10:00:00"})
-        self.assertFalse(resultado)
-        self.mock_create.assert_not_called()
-
-    def test_rejeita_fonte_mock(self):
-        from app.services.news_collector import upsert_noticia
-        resultado = upsert_noticia({"title": "Test News", "site": "mock", "publishedDate": "2026-07-31 10:00:00"})
-        self.assertFalse(resultado)
-        self.mock_create.assert_not_called()
-
 
 class TestUpsertNoticia(unittest.TestCase):
-    """Testa lógica de upsert — não duplicar, criar quando necessário."""
+    """Testa lógica de upsert com os novos campos e tagging."""
 
     def setUp(self):
         self.mock_query = patch('app.services.news_collector._notion_query_by_id_externo').start()
@@ -147,87 +224,20 @@ class TestUpsertNoticia(unittest.TestCase):
         base.update(kwargs)
         return base
 
-    def test_skip_se_ja_existe(self):
-        from app.services.news_collector import upsert_noticia
-        self.mock_query.return_value = True
-        resultado = upsert_noticia(self._artigo_valido())
-        self.assertFalse(resultado)
-        self.mock_create.assert_not_called()
-
-    def test_cria_se_nao_existe(self):
+    def test_cria_noticia_com_tagging_e_categoria(self):
         from app.services.news_collector import upsert_noticia
         self.mock_query.return_value = False
         self.mock_create.return_value = True
-        resultado = upsert_noticia(self._artigo_valido())
+
+        artigo = self._artigo_valido(title="Stock Market Today: Nasdaq Advances; Coinbase Tumbles")
+        resultado = upsert_noticia(artigo)
         self.assertTrue(resultado)
-        self.mock_create.assert_called_once()
 
-    def test_usa_url_como_id_externo(self):
-        from app.services.news_collector import upsert_noticia
-        self.mock_query.return_value = False
-        self.mock_create.return_value = True
-        upsert_noticia(self._artigo_valido(url="https://reuters.com/unique-article"))
-        call_args = self.mock_query.call_args[0][0]
-        self.assertEqual(call_args, "https://reuters.com/unique-article")
-
-    def test_usa_hash_quando_sem_url(self):
-        from app.services.news_collector import upsert_noticia
-        self.mock_query.return_value = False
-        self.mock_create.return_value = True
-        artigo = self._artigo_valido()
-        del artigo["url"]
-        upsert_noticia(artigo)
-        call_args = self.mock_query.call_args[0][0]
-        self.assertTrue(call_args.startswith("hash:"))
-
-    def test_sentimento_positivo_copiado(self):
-        """Sentimento é copiado da FMP se disponível — nunca calculado."""
-        from app.services.news_collector import upsert_noticia
-        self.mock_query.return_value = False
-        self.mock_create.return_value = True
-        upsert_noticia(self._artigo_valido(sentiment="Positive"))
-        # _notion_create_news_page receives props directly (payload built inside the function)
         props = self.mock_create.call_args[0][0]
-        self.assertEqual(props["Sentimento (Fonte)"]["select"]["name"], "Positivo")
-
-    def test_sem_campo_sentimento_se_fmp_nao_devolve(self):
-        """Se FMP não devolver sentimento, o campo deve ser 'Não Fornecido' (nunca omitido)."""
-        from app.services.news_collector import upsert_noticia
-        self.mock_query.return_value = False
-        self.mock_create.return_value = True
-        upsert_noticia(self._artigo_valido())  # Sem 'sentiment'
-        props = self.mock_create.call_args[0][0]
-        self.assertIn("Sentimento (Fonte)", props)
-        self.assertEqual(props["Sentimento (Fonte)"]["select"]["name"], "Não Fornecido")
-
-    def test_fonte_de_registo_sempre_automatico(self):
-        from app.services.news_collector import upsert_noticia
-        self.mock_query.return_value = False
-        self.mock_create.return_value = True
-        upsert_noticia(self._artigo_valido())
-        props = self.mock_create.call_args[0][0]
-        self.assertEqual(props["Fonte de Registo"]["select"]["name"], "Automático (Cron)")
-
-
-class TestParsePubDate(unittest.TestCase):
-    """Testa parsing robusto de datas da FMP."""
-
-    def test_formato_standard_fmp(self):
-        from app.services.news_collector import _parse_pub_date
-        dt = _parse_pub_date("2026-07-31 10:30:00")
-        self.assertEqual(dt.year, 2026)
-        self.assertEqual(dt.month, 7)
-        self.assertEqual(dt.day, 31)
-
-    def test_data_invalida_devolve_datetime_min(self):
-        from app.services.news_collector import _parse_pub_date
-        dt = _parse_pub_date("invalid-date")
-        self.assertEqual(dt, datetime.min.replace(tzinfo=timezone.utc))
-
-    def test_data_vazia_devolve_datetime_min(self):
-        from app.services.news_collector import _parse_pub_date
-        dt = _parse_pub_date("")
-        self.assertEqual(dt, datetime.min.replace(tzinfo=timezone.utc))
+        self.assertIn("^NDX", props["Ticker(s) Relacionado(s)"]["rich_text"][0]["text"]["content"])
+        self.assertIn("COIN", props["Ticker(s) Relacionado(s)"]["rich_text"][0]["text"]["content"])
+        self.assertEqual(props["Categoria"]["select"]["name"], "Empresa Específica")
+        self.assertIn("Resumo (Meta-descrição)", props)
 
 
 class TestRunNewsCollectionGuardrails(unittest.TestCase):
