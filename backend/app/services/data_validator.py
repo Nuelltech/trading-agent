@@ -45,6 +45,7 @@ PLAUSIBILITY_LIMITS = {
 # 2. Limiares de Spikes por Classe de Ativo (Evita Alert Fatigue)
 SPIKE_THRESHOLDS = {
     "^VIX": 0.30,        # 30% - VIX oscila fortemente em momentos de pânico real
+    "^KS11": 0.20,       # 20% - Kospi Index em recuperações pós-decisão de política
     "BZ=F": 0.12,        # 12% - Petróleo Brent afetado por choques geopolíticos
     "CL=F": 0.12,        # 12% - Petróleo WTI
     "GC=F": 0.08,        # 8%  - Ouro
@@ -53,9 +54,28 @@ SPIKE_THRESHOLDS = {
     "DX-Y.NYB": 0.03,    # 3%  - DXY raramente move mais de 3% num único dia
     "EURUSD=X": 0.02,    # 2.0% - Major Forex
     "GBPUSD=X": 0.02,    # 2.0%
-    "USDJPY=X": 0.02,    # 2.0%
+    "USDJPY=X": 0.035,   # 3.5% - Intervenções do Banco do Japão (BoJ) produzem movimentos reais
     "default": 0.15      # 15% default para ações e ETFs
 }
+
+
+def auto_resolve_anomalies(target_table: str, symbol_or_event: str):
+    """
+    Auto-resolução de anomalias pendentes: quando um novo registo válido é promovido
+    para a produção, as anomalias pendentes desse símbolo/evento são marcadas como RESOLVED_APPROVED.
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE data_anomalies_log 
+                SET status = 'RESOLVED_APPROVED', 
+                    last_seen = NOW()
+                WHERE target_table = :target_table 
+                  AND symbol_or_event = :symbol_or_event 
+                  AND status = 'PENDING'
+            """), {"target_table": target_table, "symbol_or_event": symbol_or_event})
+    except Exception as e:
+        logging.debug(f"Não foi possível auto-resolver anomalias para {symbol_or_event}: {e}")
 
 CENTRAL_BANK_EVENTS = [
     "Fed Interest Rate Decision",
@@ -297,6 +317,7 @@ def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: 
                     "volume": vol_final
                 })
                 trans.commit()
+                auto_resolve_anomalies("indicator_values", ticker)
                 return {
                     "status": "updated",
                     "open_val": float(ext_open if ext_open is not None else novo_open),
@@ -322,6 +343,7 @@ def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: 
                     "volume": int(volume or 0)
                 })
                 trans.commit()
+                auto_resolve_anomalies("indicator_values", ticker)
                 return {
                     "status": "inserted",
                     "open_val": float(novo_open),
@@ -334,4 +356,3 @@ def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: 
             trans.rollback()
             logging.error(f"Erro ao promover {ticker} para produção: {e}")
             return {"status": "error", "message": str(e)}
-

@@ -32,7 +32,7 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     tr3 = (low - close).abs()
     
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    atr = tr.rolling(window=period).mean()
+    atr = tr.rolling(window=period, min_periods=min(14, period)).mean()
     return atr
 
 def is_swing_high(df: pd.DataFrame, t: int, n: int = 3) -> bool:
