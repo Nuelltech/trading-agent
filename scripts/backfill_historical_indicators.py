@@ -277,6 +277,29 @@ def backfill_mysql_indicators() -> Dict[str, int]:
     return stats
 
 
+def _fetch_existing_notion_dates(db_id: str, ticker: str) -> set:
+    """Procura no Notion todas as datas já gravadas para um determinado ticker numa única consulta."""
+    url = f"https://api.notion.com/v1/databases/{db_id}/query"
+    payload = {
+        "filter": {
+            "property": "Ticker", "title": {"equals": ticker}
+        },
+        "page_size": 100
+    }
+    existing_dates = set()
+    try:
+        res = requests.post(url, headers=NOTION_HEADERS, json=payload, timeout=10)
+        time.sleep(0.35)
+        if res.status_code == 200:
+            for page in res.json().get("results", []):
+                dt_prop = page.get("properties", {}).get("Data", {}).get("date")
+                if dt_prop and dt_prop.get("start"):
+                    existing_dates.add(dt_prop["start"])
+    except Exception as e:
+        logging.warning(f"⚠️ Erro ao consultar datas existentes no Notion para [{ticker}]: {e}")
+    return existing_dates
+
+
 def propagate_notion_backfill() -> None:
     """
     Passo 2: Propaga as 60 sessões históricas do MySQL para o Notion.
@@ -303,7 +326,6 @@ def propagate_notion_backfill() -> None:
     close_data_map = {}
 
     with engine.connect() as conn:
-        # Carregar OHLC para watched tickers
         for ticker in watched_tickers:
             sql = text("""
                 SELECT DATE(timestamp) as session_date, open_val, high_val, low_val, value
@@ -315,7 +337,6 @@ def propagate_notion_backfill() -> None:
             rows = conn.execute(sql, {"ticker": ticker, "limit": LOOKBACK_SESSIONS}).fetchall()
             ohlc_data_map[ticker] = [dict(r._mapping) for r in rows]
 
-        # Carregar catálogo e Close data para todos os 36 tickers
         cat_rows = conn.execute(text("SELECT ticker, name, category FROM indicators_catalog")).fetchall()
         all_catalog = [dict(r._mapping) for r in cat_rows]
 
@@ -338,52 +359,43 @@ def propagate_notion_backfill() -> None:
 
     # 2. Propagar OHLC Ativos Vigiados — Claude
     logging.info(f"📊 1/2 Propagando {len(watched_tickers)} tickers vigiados para 'OHLC Ativos Vigiados — Claude'...")
-    url_query_ohlc = f"https://api.notion.com/v1/databases/{NOTION_CLAUDE_OHLC_DATABASE_ID}/query"
     url_post_page = "https://api.notion.com/v1/pages"
 
     ohlc_created = 0
     ohlc_skipped = 0
 
     for ticker, rows in ohlc_data_map.items():
+        existing_dates = _fetch_existing_notion_dates(NOTION_CLAUDE_OHLC_DATABASE_ID, ticker)
+
         for r in rows:
             session_date = str(r["session_date"])
+            if session_date in existing_dates:
+                ohlc_skipped += 1
+                continue
+
             open_v = float(r["open_val"] or r["value"])
             high_v = float(r["high_val"] or r["value"])
             low_v = float(r["low_val"] or r["value"])
             close_v = float(r["value"])
 
-            query_payload = {
-                "filter": {
-                    "and": [
-                        {"property": "Ticker", "title": {"equals": ticker}},
-                        {"property": "Data", "date": {"equals": session_date}}
-                    ]
+            post_payload = {
+                "parent": {"database_id": NOTION_CLAUDE_OHLC_DATABASE_ID},
+                "properties": {
+                    "Ticker": {"title": [{"text": {"content": ticker}}]},
+                    "Data": {"date": {"start": session_date}},
+                    "Open": {"number": round(open_v, 4)},
+                    "High": {"number": round(high_v, 4)},
+                    "Low": {"number": round(low_v, 4)},
+                    "Close": {"number": round(close_v, 4)}
                 }
             }
             try:
-                res = requests.post(url_query_ohlc, headers=NOTION_HEADERS, json=query_payload, timeout=10)
-                time.sleep(0.35)
-
-                if res.status_code == 200 and len(res.json().get("results", [])) > 0:
-                    ohlc_skipped += 1
-                    continue
-
-                post_payload = {
-                    "parent": {"database_id": NOTION_CLAUDE_OHLC_DATABASE_ID},
-                    "properties": {
-                        "Ticker": {"title": [{"text": {"content": ticker}}]},
-                        "Data": {"date": {"start": session_date}},
-                        "Open": {"number": round(open_v, 4)},
-                        "High": {"number": round(high_v, 4)},
-                        "Low": {"number": round(low_v, 4)},
-                        "Close": {"number": round(close_v, 4)}
-                    }
-                }
                 res_post = requests.post(url_post_page, headers=NOTION_HEADERS, json=post_payload, timeout=10)
                 time.sleep(0.35)
 
                 if res_post.status_code in [200, 201]:
                     ohlc_created += 1
+                    existing_dates.add(session_date)
             except Exception as e:
                 logging.warning(f"⚠️ Erro ao enviar OHLC para [{ticker} - {session_date}]: {e}")
 
@@ -391,51 +403,43 @@ def propagate_notion_backfill() -> None:
 
     # 3. Propagar Close Diário — Todos os Ativos — Claude
     logging.info(f"📈 2/2 Propagando {len(close_data_map)} tickers para 'Close Diário — Todos os Ativos — Claude'...")
-    url_query_close = f"https://api.notion.com/v1/databases/{NOTION_CLAUDE_CLOSE_DATABASE_ID}/query"
     close_created = 0
     close_skipped = 0
 
     for ticker, info in close_data_map.items():
         nome = info["name"]
+        existing_dates = _fetch_existing_notion_dates(NOTION_CLAUDE_CLOSE_DATABASE_ID, ticker)
+
         for r in info["rows"]:
             session_date = str(r["session_date"])
+            if session_date in existing_dates:
+                close_skipped += 1
+                continue
+
             close_v = float(r["value"])
 
-            query_payload = {
-                "filter": {
-                    "and": [
-                        {"property": "Ticker", "title": {"equals": ticker}},
-                        {"property": "Data", "date": {"equals": session_date}}
-                    ]
+            post_payload = {
+                "parent": {"database_id": NOTION_CLAUDE_CLOSE_DATABASE_ID},
+                "properties": {
+                    "Ticker": {"title": [{"text": {"content": ticker}}]},
+                    "Nome": {"rich_text": [{"text": {"content": nome}}]},
+                    "Data": {"date": {"start": session_date}},
+                    "Close": {"number": round(close_v, 4)}
                 }
             }
             try:
-                res = requests.post(url_query_close, headers=NOTION_HEADERS, json=query_payload, timeout=10)
-                time.sleep(0.35)
-
-                if res.status_code == 200 and len(res.json().get("results", [])) > 0:
-                    close_skipped += 1
-                    continue
-
-                post_payload = {
-                    "parent": {"database_id": NOTION_CLAUDE_CLOSE_DATABASE_ID},
-                    "properties": {
-                        "Ticker": {"title": [{"text": {"content": ticker}}]},
-                        "Nome": {"rich_text": [{"text": {"content": nome}}]},
-                        "Data": {"date": {"start": session_date}},
-                        "Close": {"number": round(close_v, 4)}
-                    }
-                }
                 res_post = requests.post(url_post_page, headers=NOTION_HEADERS, json=post_payload, timeout=10)
                 time.sleep(0.35)
 
                 if res_post.status_code in [200, 201]:
                     close_created += 1
+                    existing_dates.add(session_date)
             except Exception as e:
                 logging.warning(f"⚠️ Erro ao enviar Close para [{ticker} - {session_date}]: {e}")
 
     logging.info(f"✅ 'Close Diário' concluído! Criadas: {close_created} | Já existentes: {close_skipped}")
     logging.info("🎉 Propagação para o Notion concluída com sucesso!")
+
 
 
 
