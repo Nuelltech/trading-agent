@@ -20,6 +20,7 @@ from typing import Dict, Any, List, Optional
 import requests
 import yfinance as yf
 from sqlalchemy import text
+from app.database import engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 

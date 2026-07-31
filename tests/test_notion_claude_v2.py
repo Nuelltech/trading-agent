@@ -52,11 +52,14 @@ class TestClaudeNotionV2(unittest.TestCase):
         mock_ticker_obj.history.return_value = df_stale
         mock_yf.return_value = mock_ticker_obj
 
-        # Pedir cotação para o novo dia (2026-07-31)
-        res = fetch_ticker_ohlc("^GSPC", target_date="2026-07-31")
+        # Mock MySQL connection to return None (no row in DB for 2026-07-31)
+        with patch("app.services.notion_claude_sync_service.engine.connect") as mock_conn:
+            mock_conn.return_value.__enter__.return_value.execute.return_value.fetchone.return_value = None
+            res = fetch_ticker_ohlc("^GSPC", target_date="2026-07-31")
 
         # Deve retornar None porque a sessão de 2026-07-31 ainda não começou
         self.assertIsNone(res, "fetch_ticker_ohlc deve retornar None se a sessão do dia solicitado ainda não tiver iniciado!")
+
 
 
 if __name__ == "__main__":

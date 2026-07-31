@@ -104,14 +104,19 @@ FRED_BACKFILL_MAP = {
 }
 
 
+import math
+
 def _validate_backfill_plausibility(symbol: str, value: float) -> bool:
     """Validação de plausibilidade rígida sem spike check."""
+    if value is None or pd.isna(value) or math.isnan(value):
+        return False
     if symbol in PLAUSIBILITY_LIMITS:
         limits = PLAUSIBILITY_LIMITS[symbol]
         if not (limits["min"] <= value <= limits["max"]):
             logging.warning(f"⚠️ [{symbol}] Backfill rejeitado: {value} fora dos limites [{limits['min']}, {limits['max']}]")
             return False
     return True
+
 
 
 def backfill_mysql_indicators() -> Dict[str, int]:
@@ -146,13 +151,9 @@ def backfill_mysql_indicators() -> Dict[str, int]:
                 trans = conn.begin()
                 try:
                     for date_idx, row in df_sess.iterrows():
+
                         session_date = str(date_idx)[:10]
                         ts = f"{session_date} 00:00:00"
-
-                        check_sql = text("SELECT id FROM indicator_values WHERE symbol = :sym AND timestamp = :ts LIMIT 1")
-                        if conn.execute(check_sql, {"sym": ticker, "ts": ts}).fetchone():
-                            stats["skipped_existing"] += 1
-                            continue
 
                         close_val = float(row.get("Close", 0.0)) * info["multiplier"]
                         open_val = float(row.get("Open", close_val)) * info["multiplier"]
@@ -169,12 +170,14 @@ def backfill_mysql_indicators() -> Dict[str, int]:
                             stats["quarantined"] += 1
                             continue
 
+                        # Inserção atómica que ignora chaves duplicadas (preserva datas existentes)
                         ins_sql = text("""
                             INSERT INTO indicator_values 
                             (indicator_id, symbol, timestamp, value, open_val, high_val, low_val, volume)
                             VALUES (:indicator_id, :symbol, :ts, :value, :open_val, :high_val, :low_val, :volume)
+                            ON DUPLICATE KEY UPDATE id=id;
                         """)
-                        conn.execute(ins_sql, {
+                        res_ins = conn.execute(ins_sql, {
                             "indicator_id": indicator_id,
                             "symbol": ticker,
                             "ts": ts,
@@ -184,7 +187,11 @@ def backfill_mysql_indicators() -> Dict[str, int]:
                             "low_val": low_val,
                             "volume": vol_val
                         })
-                        stats["inserted"] += 1
+                        if res_ins.rowcount == 1:
+                            stats["inserted"] += 1
+                        else:
+                            stats["skipped_existing"] += 1
+
                     trans.commit()
                     logging.info(f"  └─ [{ticker}] Backfill de 60 sessões concluído.")
                 except Exception as ex:
@@ -192,7 +199,6 @@ def backfill_mysql_indicators() -> Dict[str, int]:
                     logging.warning(f"⚠️ Erro no commit do backfill para [{ticker}]: {ex}")
         except Exception as ex:
             logging.warning(f"⚠️ Erro ao processar backfill para [{ticker}]: {ex}")
-
 
     # 2. Backfill FRED (Séries Soberanas DGS2, Bund, Gilt, JGB)
     logging.info("🏛️ Descarregando séries históricas via FRED...")
@@ -203,7 +209,6 @@ def backfill_mysql_indicators() -> Dict[str, int]:
             continue
 
         obs_list = []
-        # Tenta FRED API oficial primeiro
         if FRED_API_KEY:
             try:
                 url = f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}&api_key={FRED_API_KEY}&file_type=json&sort_order=desc&limit=90"
@@ -215,7 +220,6 @@ def backfill_mysql_indicators() -> Dict[str, int]:
             except Exception as e:
                 logging.warning(f"⚠️ FRED API falhou para {series_id}: {e}")
 
-        # Fallback FRED CSV Open Data se API key não estiver disponível
         if not obs_list:
             try:
                 csv_url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
@@ -237,11 +241,6 @@ def backfill_mysql_indicators() -> Dict[str, int]:
                     ts = f"{dt} 00:00:00"
                     val = item["value"]
 
-                    check_sql = text("SELECT id FROM indicator_values WHERE symbol = :sym AND timestamp = :ts LIMIT 1")
-                    if conn.execute(check_sql, {"sym": series_id, "ts": ts}).fetchone():
-                        stats["skipped_existing"] += 1
-                        continue
-
                     if not _validate_backfill_plausibility(series_id, val):
                         stats["quarantined"] += 1
                         continue
@@ -250,8 +249,9 @@ def backfill_mysql_indicators() -> Dict[str, int]:
                         INSERT INTO indicator_values 
                         (indicator_id, symbol, timestamp, value, open_val, high_val, low_val, volume)
                         VALUES (:indicator_id, :symbol, :ts, :value, :open_val, :high_val, :low_val, :volume)
+                        ON DUPLICATE KEY UPDATE id=id;
                     """)
-                    conn.execute(ins_sql, {
+                    res_ins = conn.execute(ins_sql, {
                         "indicator_id": indicator_id,
                         "symbol": series_id,
                         "ts": ts,
@@ -261,7 +261,11 @@ def backfill_mysql_indicators() -> Dict[str, int]:
                         "low_val": val,
                         "volume": 0
                     })
-                    stats["inserted"] += 1
+                    if res_ins.rowcount == 1:
+                        stats["inserted"] += 1
+                    else:
+                        stats["skipped_existing"] += 1
+
                 trans.commit()
                 logging.info(f"  └─ [{series_id}] FRED Backfill concluído.")
             except Exception as ex:
