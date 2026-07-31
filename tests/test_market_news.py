@@ -191,13 +191,14 @@ class TestUpsertNoticia(unittest.TestCase):
         self.assertEqual(props["Sentimento (Fonte)"]["select"]["name"], "Positivo")
 
     def test_sem_campo_sentimento_se_fmp_nao_devolve(self):
-        """Se FMP não devolver sentimento, o campo não é enviado ao Notion."""
+        """Se FMP não devolver sentimento, o campo deve ser 'Não Fornecido' (nunca omitido)."""
         from app.services.news_collector import upsert_noticia
         self.mock_query.return_value = False
         self.mock_create.return_value = True
         upsert_noticia(self._artigo_valido())  # Sem 'sentiment'
         props = self.mock_create.call_args[0][0]
-        self.assertNotIn("Sentimento (Fonte)", props)
+        self.assertIn("Sentimento (Fonte)", props)
+        self.assertEqual(props["Sentimento (Fonte)"]["select"]["name"], "Não Fornecido")
 
     def test_fonte_de_registo_sempre_automatico(self):
         from app.services.news_collector import upsert_noticia

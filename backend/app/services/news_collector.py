@@ -277,22 +277,22 @@ def upsert_noticia(artigo: Dict, ticker_relacionado: str = "") -> bool:
         logging.debug(f"  ⏭️ Já existe no Notion: [{titulo[:50]}]")
         return False
 
-    # ── Timestamp de publicação ───────────────────────────────────────────────
+    # ── Timestamp de publicação (datetime completo com timezone — Notion requer hora) ────
     try:
         dt_pub = datetime.strptime(timestamp_pub[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        ts_pub_iso = dt_pub.isoformat()
+        ts_pub_iso = dt_pub.strftime("%Y-%m-%dT%H:%M:%S+00:00")  # Formato que o Notion exige para datetime
     except Exception:
-        ts_pub_iso = datetime.now(timezone.utc).isoformat()
+        ts_pub_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
-    ts_ingestao_iso = datetime.now(timezone.utc).isoformat()
+    ts_ingestao_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
     # ── Categorização determinística ──────────────────────────────────────────
     categoria = categorizar_noticia(ticker_relacionado, titulo)
 
-    # ── Sentimento (só se a FMP devolver — nunca calculado por nós) ──────────
+    # ── Sentimento (copiado da FMP se disponível; 'Não Fornecido' caso contrário — nunca calculado) ──
     sentimento_raw = artigo.get("sentiment") or artigo.get("overallSentiment") or ""
     sentimento_map = {"Positive": "Positivo", "Negative": "Negativo", "Neutral": "Neutro"}
-    sentimento = sentimento_map.get(sentimento_raw, "")
+    sentimento = sentimento_map.get(sentimento_raw, "Não Fornecido")
 
     # ── Build Notion properties ───────────────────────────────────────────────
     notion_props: Dict[str, Any] = {
@@ -304,13 +304,11 @@ def upsert_noticia(artigo: Dict, ticker_relacionado: str = "") -> bool:
         "Categoria": {"select": {"name": categoria}},
         "Fonte de Registo": {"select": {"name": "Automático (Cron)"}},
         "ID Fonte Externa": {"rich_text": [{"text": {"content": id_externo[:2000]}}]},
+        "Sentimento (Fonte)": {"select": {"name": sentimento}},  # Sempre enviado — nunca omitido
     }
 
     if url_artigo:
         notion_props["URL"] = {"url": url_artigo}
-
-    if sentimento:
-        notion_props["Sentimento (Fonte)"] = {"select": {"name": sentimento}}
 
     if _notion_create_news_page(notion_props):
         logging.info(f"  ✅ Inserido: [{categoria}] {titulo[:60]}...")

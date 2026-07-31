@@ -2,8 +2,8 @@ name: Cron - Feed de Notícias de Mercado (FMP → Notion)
 
 on:
   schedule:
-    # A cada 30 minutos, dias úteis (Seg-Sex) — alinhado com cron-notion-sync.yml
-    - cron: '*/30 * * * 1-5'
+    # A cada 30 minutos, desfasado 5 min do cron-notion-sync.yml (:00/:30) → :05/:35
+    - cron: '5,35 * * * 1-5'
   workflow_dispatch:
     inputs:
       backfill:
