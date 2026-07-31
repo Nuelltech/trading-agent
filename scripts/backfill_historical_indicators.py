@@ -288,7 +288,7 @@ def _fetch_existing_notion_dates(db_id: str, ticker: str) -> set:
     }
     existing_dates = set()
     try:
-        res = requests.post(url, headers=NOTION_HEADERS, json=payload, timeout=10)
+        res = requests.post(url, headers=NOTION_HEADERS, json=payload, timeout=15)
         time.sleep(0.35)
         if res.status_code == 200:
             for page in res.json().get("results", []):
@@ -298,6 +298,24 @@ def _fetch_existing_notion_dates(db_id: str, ticker: str) -> set:
     except Exception as e:
         logging.warning(f"⚠️ Erro ao consultar datas existentes no Notion para [{ticker}]: {e}")
     return existing_dates
+
+
+def _post_notion_payload(url: str, payload: dict, max_retries: int = 3) -> bool:
+    """Envia payload para o Notion com tentativas de retry em caso de timeout de rede."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            res = requests.post(url, headers=NOTION_HEADERS, json=payload, timeout=15)
+            time.sleep(0.35)
+            if res.status_code in [200, 201]:
+                return True
+            elif res.status_code == 429:
+                time.sleep(2.0 * attempt)
+        except Exception as e:
+            if attempt == max_retries:
+                logging.warning(f"⚠️ Notion POST falhou após {max_retries} tentativas: {e}")
+            else:
+                time.sleep(1.5 * attempt)
+    return False
 
 
 def propagate_notion_backfill() -> None:
@@ -389,15 +407,9 @@ def propagate_notion_backfill() -> None:
                     "Close": {"number": round(close_v, 4)}
                 }
             }
-            try:
-                res_post = requests.post(url_post_page, headers=NOTION_HEADERS, json=post_payload, timeout=10)
-                time.sleep(0.35)
-
-                if res_post.status_code in [200, 201]:
-                    ohlc_created += 1
-                    existing_dates.add(session_date)
-            except Exception as e:
-                logging.warning(f"⚠️ Erro ao enviar OHLC para [{ticker} - {session_date}]: {e}")
+            if _post_notion_payload(url_post_page, post_payload):
+                ohlc_created += 1
+                existing_dates.add(session_date)
 
     logging.info(f"✅ 'OHLC Ativos Vigiados' concluído! Criadas: {ohlc_created} | Já existentes: {ohlc_skipped}")
 
@@ -427,18 +439,13 @@ def propagate_notion_backfill() -> None:
                     "Close": {"number": round(close_v, 4)}
                 }
             }
-            try:
-                res_post = requests.post(url_post_page, headers=NOTION_HEADERS, json=post_payload, timeout=10)
-                time.sleep(0.35)
-
-                if res_post.status_code in [200, 201]:
-                    close_created += 1
-                    existing_dates.add(session_date)
-            except Exception as e:
-                logging.warning(f"⚠️ Erro ao enviar Close para [{ticker} - {session_date}]: {e}")
+            if _post_notion_payload(url_post_page, post_payload):
+                close_created += 1
+                existing_dates.add(session_date)
 
     logging.info(f"✅ 'Close Diário' concluído! Criadas: {close_created} | Já existentes: {close_skipped}")
     logging.info("🎉 Propagação para o Notion concluída com sucesso!")
+
 
 
 
