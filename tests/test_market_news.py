@@ -81,11 +81,17 @@ class TestDetecaoTickers(unittest.TestCase):
         self.assertIn("^SOX", mencionados)
         self.assertNotIn("^GSPC", mencionados)
 
-    def test_deteta_gold_e_tether(self):
+    def test_deteta_gold_sem_coinbase(self):
         from app.services.news_collector import detetar_tickers_mencionados
         texto = "Tether adds 14 tons of gold to its reserves in Q3"
         mencionados = detetar_tickers_mencionados(texto, self.watchlist_map)
         self.assertIn("GC=F", mencionados)
+        self.assertNotIn("COIN", mencionados)
+
+    def test_deteta_coinbase_literal(self):
+        from app.services.news_collector import detetar_tickers_mencionados
+        texto = "Coinbase shares tumble 8% after SEC update"
+        mencionados = detetar_tickers_mencionados(texto, self.watchlist_map)
         self.assertIn("COIN", mencionados)
 
     def test_titulo_sem_tickers_devolve_lista_vazia(self):
@@ -246,7 +252,8 @@ class TestUpsertNoticia(unittest.TestCase):
         self.mock_create.return_value = True
 
         artigo = self._artigo_valido(title="Stock Market Today: Nasdaq Advances; Coinbase Tumbles")
-        resultado = upsert_noticia(artigo)
+        watchlist_map = {"^NDX": "Nasdaq", "COIN": "Coinbase"}
+        resultado = upsert_noticia(artigo, watchlist_map=watchlist_map)
         self.assertTrue(resultado)
 
         props = self.mock_create.call_args[0][0]

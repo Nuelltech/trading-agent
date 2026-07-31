@@ -102,7 +102,6 @@ DEFAULT_TICKER_NAMES = {
     "O": "Realty Income",
     "DX-Y.NYB": "US Dollar Index",
     "DGS2": "2-Year Treasury Yield",
-    "COIN": "Coinbase",
     "AAPL": "Apple",
     "MSFT": "Microsoft",
     "NVDA": "Nvidia",
@@ -129,7 +128,7 @@ TICKER_KEYWORD_ALIASES: Dict[str, List[str]] = {
     "USDJPY=X": ["usd/jpy", "usdjpy", "yen"],
     "O": ["realty income"],
     "DX-Y.NYB": ["dollar index", "dxy", "us dollar index"],
-    "COIN": ["coinbase", "tether", "crypto", "bitcoin", "btc"],
+    "COIN": ["coinbase", "coin"],  # Tagging 100% literal — apenas menções diretas a Coinbase/COIN
     "AAPL": ["apple", "iphone"],
     "MSFT": ["microsoft", "azure"],
     "NVDA": ["nvidia", "nvda"],
