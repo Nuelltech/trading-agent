@@ -118,6 +118,10 @@ class TestDataIntegrity(unittest.TestCase):
         presa ao primeiro valor.
         """
         res1 = promover_para_producao("^GSPC", "2026-07-30", 7390.45, 7417.36, 7370.98, 7375.80)
+        if res1.get("status") == "error" and ("Can't connect" in str(res1.get("message")) or "timed out" in str(res1.get("message"))):
+            self.skipTest("MySQL inacessível durante a execução do teste unitário em CI/CD.")
+            return
+
         self.assertIn(res1.get("status"), ["inserted", "updated"])
 
         res2 = promover_para_producao("^GSPC", "2026-07-30", 7390.45, 7448.75, 7370.98, 7437.63)
