@@ -108,19 +108,32 @@ def get_claude_watchlist() -> List[Dict[str, Any]]:
         logging.error(f"❌ Falha ao ler Configuração de Vigilância para Claude: {e}")
         return []
 
-def fetch_ticker_ohlc(ticker: str) -> Dict[str, float]:
-    """Lê Open, High, Low, Close de hoje no MySQL (ou fallback yfinance)"""
+def fetch_ticker_ohlc(ticker: str, target_date: Optional[str] = None) -> Optional[Dict[str, float]]:
+    """
+    Lê Open, High, Low, Close para o ticker na data `target_date` (YYYY-MM-DD).
+    Se target_date não for fornecido, assume a data UTC atual.
+    
+    REGRA RIGOROSA DE ROLLOVER:
+    Se não existirem dados na MySQL ou no yFinance especificamente para a data `target_date`
+    (ex: mercado ainda não abriu no novo dia civil UTC), a função retorna None.
+    Isto IMPEDE que dados do dia anterior sejam propagados e rotulados como a nova data no Notion.
+    """
+    if not target_date:
+        target_date = datetime.utcnow().strftime("%Y-%m-%d")
+
     ohlc = {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0}
+
+    # 1. Tentar MySQL filtrando especificamente por DATE(timestamp) = target_date
     try:
         from app.database import engine
         with engine.connect() as conn:
             sql = text("""
                 SELECT open_val, high_val, low_val, value 
                 FROM indicator_values 
-                WHERE symbol = :ticker 
+                WHERE symbol = :ticker AND DATE(timestamp) = :target_date
                 ORDER BY timestamp DESC LIMIT 1
             """)
-            row = conn.execute(sql, {"ticker": ticker}).fetchone()
+            row = conn.execute(sql, {"ticker": ticker, "target_date": target_date}).fetchone()
             if row and row[3] is not None:
                 ohlc["open"] = float(row[0] or row[3])
                 ohlc["high"] = float(row[1] or row[3])
@@ -128,20 +141,27 @@ def fetch_ticker_ohlc(ticker: str) -> Dict[str, float]:
                 ohlc["close"] = float(row[3])
                 return ohlc
     except Exception as e:
-        logging.warning(f"⚠️ Erro MySQL para [{ticker}]: {e}. Ativando fallback yfinance...")
+        logging.warning(f"⚠️ Erro no MySQL para [{ticker}]: {e}.")
 
+    # 2. Fallback via yfinance garantindo que a data da última barra coincide com target_date
     try:
         df = yf.Ticker(ticker).history(period="5d")
         if not df.empty:
-            last = df.iloc[-1]
-            ohlc["open"] = float(last.get("Open", last.get("Close", 0.0)))
-            ohlc["high"] = float(last.get("High", last.get("Close", 0.0)))
-            ohlc["low"] = float(last.get("Low", last.get("Close", 0.0)))
-            ohlc["close"] = float(last.get("Close", 0.0))
+            last_date_str = str(df.index[-1])[:10]
+            if last_date_str == target_date:
+                last = df.iloc[-1]
+                ohlc["open"] = float(last.get("Open", last.get("Close", 0.0)))
+                ohlc["high"] = float(last.get("High", last.get("Close", 0.0)))
+                ohlc["low"] = float(last.get("Low", last.get("Close", 0.0)))
+                ohlc["close"] = float(last.get("Close", 0.0))
+                return ohlc
+            else:
+                logging.info(f"ℹ️ [{ticker}] Sessão de hoje ({target_date}) ainda não iniciada. Dados mais recentes do yfinance são de {last_date_str}.")
     except Exception as ex:
         logging.warning(f"Falha yfinance para [{ticker}]: {ex}")
 
-    return ohlc
+    return None
+
 
 # -----------------------------------------------------------------------------
 # 1. Sync Database #2: OHLC Ativos Vigiados — Claude (076b90fe-be23-4cdc-933a-e46dc99d669c)
@@ -164,9 +184,10 @@ def sync_claude_ohlc_vigiados() -> bool:
     for item in watchlist:
         ticker = item["ticker"]
         nome = item.get("nome", ticker)
-        new_ohlc = fetch_ticker_ohlc(ticker)
+        new_ohlc = fetch_ticker_ohlc(ticker, today_date)
 
-        if new_ohlc["close"] == 0.0:
+        if not new_ohlc or new_ohlc["close"] == 0.0:
+            logging.info(f"ℹ️ [{ticker}] Sem dados de hoje ({today_date}) ainda. Linha no Notion mantida inalterada.")
             continue
 
         query_payload = {
@@ -185,25 +206,20 @@ def sync_claude_ohlc_vigiados() -> bool:
             if existing_results:
                 page = existing_results[0]
                 page_id = page["id"]
-                props = page.get("properties", {})
-
-                curr_high = props.get("High", {}).get("number", new_ohlc["high"])
-                curr_low = props.get("Low", {}).get("number", new_ohlc["low"])
-
-                final_high = max(curr_high or new_ohlc["high"], new_ohlc["high"])
-                final_low = min(curr_low or new_ohlc["low"], new_ohlc["low"])
 
                 patch_payload = {
                     "properties": {
-                        "High": {"number": round(final_high, 4)},
-                        "Low": {"number": round(final_low, 4)},
+                        "Open": {"number": round(new_ohlc["open"], 4)},
+                        "High": {"number": round(new_ohlc["high"], 4)},
+                        "Low": {"number": round(new_ohlc["low"], 4)},
                         "Close": {"number": round(new_ohlc["close"], 4)}
                     }
                 }
 
                 url_patch = f"https://api.notion.com/v1/pages/{page_id}"
                 requests.patch(url_patch, headers=NOTION_HEADERS, json=patch_payload, timeout=10)
-                logging.info(f"✅ [CLAUDE OHLC] [{ticker}] atualizado (High={final_high}, Low={final_low}, Close={new_ohlc['close']})")
+                logging.info(f"✅ [CLAUDE OHLC] [{ticker}] atualizado para {today_date} (Open={new_ohlc['open']}, High={new_ohlc['high']}, Low={new_ohlc['low']}, Close={new_ohlc['close']})")
+
 
             else:
                 post_payload = {
@@ -298,13 +314,14 @@ def sync_claude_close_todos_ativos() -> bool:
         ticker = ind["ticker"]
         nome = ind["nome"]
         cat = ind.get("categoria", "Geral")
-        ohlc = fetch_ticker_ohlc(ticker)
+        ohlc = fetch_ticker_ohlc(ticker, today_date)
+        if not ohlc or ohlc["close"] == 0.0:
+            logging.info(f"ℹ️ [{ticker}] Sem cotação Close de hoje ({today_date}) ainda. Linha no Notion mantida inalterada.")
+            continue
         close_val = ohlc["close"]
 
-        if close_val == 0.0:
-            continue
-
         query_payload = {
+
             "filter": {
                 "and": [
                     {"property": title_col, "title": {"equals": ticker}},
