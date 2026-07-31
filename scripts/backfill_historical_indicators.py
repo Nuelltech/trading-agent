@@ -283,6 +283,7 @@ def propagate_notion_backfill() -> None:
     - 'OHLC Ativos Vigiados — Claude' (11 tickers)
     - 'Close Diário — Todos os Ativos — Claude' (36 tickers)
     Respeita o rate limit da Notion API (~3 req/s → sleep 0.35s).
+    Lê todos os dados do MySQL antecipadamente para evitar timeouts de conexão MySQL.
     """
     if not NOTION_TOKEN:
         logging.error("❌ NOTION_TOKEN não configurado. Propagação para o Notion abortada.")
@@ -290,20 +291,19 @@ def propagate_notion_backfill() -> None:
 
     logging.info("📤 [PASSO 2] Iniciando Propagação de Backfill Histórico para o Notion...")
 
-    # 1. OHLC Ativos Vigiados — Claude (11 tickers)
+    # 1. Carregar todos os dados do MySQL antecipadamente (operação rápida de < 1s)
     from app.services.notion_claude_sync_service import get_claude_watchlist
-    watchlist = get_claude_watchlist()
-    watched_tickers = [item["ticker"] for item in watchlist] if watchlist else ["^GSPC", "^NDX", "BZ=F", "GC=F", "HG=F", "EURUSD=X", "^VIX", "^SOX", "^TNX", "DGS2", "DX-Y.NYB"]
+    try:
+        watchlist = get_claude_watchlist()
+        watched_tickers = [item["ticker"] for item in watchlist] if watchlist else ["^GSPC", "^NDX", "BZ=F", "GC=F", "HG=F", "EURUSD=X", "^VIX", "^SOX", "^TNX", "DGS2", "DX-Y.NYB"]
+    except Exception:
+        watched_tickers = ["^GSPC", "^NDX", "BZ=F", "GC=F", "HG=F", "EURUSD=X", "^VIX", "^SOX", "^TNX", "DGS2", "DX-Y.NYB"]
 
-    logging.info(f"📊 1/2 Propagando {len(watched_tickers)} tickers vigiados para 'OHLC Ativos Vigiados — Claude'...")
-
-    url_query_ohlc = f"https://api.notion.com/v1/databases/{NOTION_CLAUDE_OHLC_DATABASE_ID}/query"
-    url_post_page = "https://api.notion.com/v1/pages"
-
-    ohlc_created = 0
-    ohlc_skipped = 0
+    ohlc_data_map = {}
+    close_data_map = {}
 
     with engine.connect() as conn:
+        # Carregar OHLC para watched tickers
         for ticker in watched_tickers:
             sql = text("""
                 SELECT DATE(timestamp) as session_date, open_val, high_val, low_val, value
@@ -313,22 +313,56 @@ def propagate_notion_backfill() -> None:
                 LIMIT :limit
             """)
             rows = conn.execute(sql, {"ticker": ticker, "limit": LOOKBACK_SESSIONS}).fetchall()
+            ohlc_data_map[ticker] = [dict(r._mapping) for r in rows]
 
-            for r in rows:
-                session_date = str(r[0])
-                open_v, high_v, low_v, close_v = float(r[1] or r[4]), float(r[2] or r[4]), float(r[3] or r[4]), float(r[4])
+        # Carregar catálogo e Close data para todos os 36 tickers
+        cat_rows = conn.execute(text("SELECT ticker, name, category FROM indicators_catalog")).fetchall()
+        all_catalog = [dict(r._mapping) for r in cat_rows]
 
-                # Verificar se já existe no Notion (Ticker + Data)
-                query_payload = {
-                    "filter": {
-                        "and": [
-                            {"property": "Ticker", "title": {"equals": ticker}},
-                            {"property": "Data", "date": {"equals": session_date}}
-                        ]
-                    }
+        for ind in all_catalog:
+            ticker = ind["ticker"]
+            sql = text("""
+                SELECT DATE(timestamp) as session_date, value
+                FROM indicator_values
+                WHERE symbol = :ticker
+                ORDER BY timestamp DESC
+                LIMIT :limit
+            """)
+            rows = conn.execute(sql, {"ticker": ticker, "limit": LOOKBACK_SESSIONS}).fetchall()
+            close_data_map[ticker] = {
+                "name": ind.get("name", ticker),
+                "rows": [dict(r._mapping) for r in rows]
+            }
+
+    logging.info(f"✅ Dados MySQL carregados em memória! ({len(ohlc_data_map)} tickers vigiados, {len(close_data_map)} tickers catálogo). Conexão MySQL fechada.")
+
+    # 2. Propagar OHLC Ativos Vigiados — Claude
+    logging.info(f"📊 1/2 Propagando {len(watched_tickers)} tickers vigiados para 'OHLC Ativos Vigiados — Claude'...")
+    url_query_ohlc = f"https://api.notion.com/v1/databases/{NOTION_CLAUDE_OHLC_DATABASE_ID}/query"
+    url_post_page = "https://api.notion.com/v1/pages"
+
+    ohlc_created = 0
+    ohlc_skipped = 0
+
+    for ticker, rows in ohlc_data_map.items():
+        for r in rows:
+            session_date = str(r["session_date"])
+            open_v = float(r["open_val"] or r["value"])
+            high_v = float(r["high_val"] or r["value"])
+            low_v = float(r["low_val"] or r["value"])
+            close_v = float(r["value"])
+
+            query_payload = {
+                "filter": {
+                    "and": [
+                        {"property": "Ticker", "title": {"equals": ticker}},
+                        {"property": "Data", "date": {"equals": session_date}}
+                    ]
                 }
+            }
+            try:
                 res = requests.post(url_query_ohlc, headers=NOTION_HEADERS, json=query_payload, timeout=10)
-                time.sleep(0.35)  # Controlar Rate Limit
+                time.sleep(0.35)
 
                 if res.status_code == 200 and len(res.json().get("results", [])) > 0:
                     ohlc_skipped += 1
@@ -350,46 +384,32 @@ def propagate_notion_backfill() -> None:
 
                 if res_post.status_code in [200, 201]:
                     ohlc_created += 1
+            except Exception as e:
+                logging.warning(f"⚠️ Erro ao enviar OHLC para [{ticker} - {session_date}]: {e}")
 
     logging.info(f"✅ 'OHLC Ativos Vigiados' concluído! Criadas: {ohlc_created} | Já existentes: {ohlc_skipped}")
 
-    # 2. Close Diário — Todos os Ativos — Claude (36 tickers)
-    logging.info("📈 2/2 Propagando 36 tickers para 'Close Diário — Todos os Ativos — Claude'...")
-
+    # 3. Propagar Close Diário — Todos os Ativos — Claude
+    logging.info(f"📈 2/2 Propagando {len(close_data_map)} tickers para 'Close Diário — Todos os Ativos — Claude'...")
     url_query_close = f"https://api.notion.com/v1/databases/{NOTION_CLAUDE_CLOSE_DATABASE_ID}/query"
     close_created = 0
     close_skipped = 0
 
-    with engine.connect() as conn:
-        cat_rows = conn.execute(text("SELECT ticker, name, category FROM indicators_catalog")).fetchall()
-        all_catalog = [dict(r._mapping) for r in cat_rows]
+    for ticker, info in close_data_map.items():
+        nome = info["name"]
+        for r in info["rows"]:
+            session_date = str(r["session_date"])
+            close_v = float(r["value"])
 
-    with engine.connect() as conn:
-        for ind in all_catalog:
-            ticker = ind["ticker"]
-            nome = ind.get("name", ticker)
-
-            sql = text("""
-                SELECT DATE(timestamp) as session_date, value
-                FROM indicator_values
-                WHERE symbol = :ticker
-                ORDER BY timestamp DESC
-                LIMIT :limit
-            """)
-            rows = conn.execute(sql, {"ticker": ticker, "limit": LOOKBACK_SESSIONS}).fetchall()
-
-            for r in rows:
-                session_date = str(r[0])
-                close_v = float(r[1])
-
-                query_payload = {
-                    "filter": {
-                        "and": [
-                            {"property": "Ticker", "title": {"equals": ticker}},
-                            {"property": "Data", "date": {"equals": session_date}}
-                        ]
-                    }
+            query_payload = {
+                "filter": {
+                    "and": [
+                        {"property": "Ticker", "title": {"equals": ticker}},
+                        {"property": "Data", "date": {"equals": session_date}}
+                    ]
                 }
+            }
+            try:
                 res = requests.post(url_query_close, headers=NOTION_HEADERS, json=query_payload, timeout=10)
                 time.sleep(0.35)
 
@@ -411,9 +431,12 @@ def propagate_notion_backfill() -> None:
 
                 if res_post.status_code in [200, 201]:
                     close_created += 1
+            except Exception as e:
+                logging.warning(f"⚠️ Erro ao enviar Close para [{ticker} - {session_date}]: {e}")
 
     logging.info(f"✅ 'Close Diário' concluído! Criadas: {close_created} | Já existentes: {close_skipped}")
     logging.info("🎉 Propagação para o Notion concluída com sucesso!")
+
 
 
 def main():
