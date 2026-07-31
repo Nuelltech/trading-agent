@@ -80,8 +80,48 @@ def build_notion_liquidity_payload(signal: Dict[str, Any], database_id: Optional
     }
     return payload
 
+def _notion_query_liquidity_signal_exists(db_id: str, symbol: str, timestamp_iso: str, level_broken: float) -> bool:
+    """
+    Deduplicação: verifica no Notion se já existe um sinal com este Ativo, Data/Hora e Nível Perfurado.
+    """
+    url = f"https://api.notion.com/v1/databases/{db_id}/query"
+    headers = {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+    payload = {
+        "filter": {
+            "and": [
+                {
+                    "property": "Ativo",
+                    "title": {"equals": str(symbol)}
+                },
+                {
+                    "property": "Data/Hora Deteção",
+                    "date": {"equals": str(timestamp_iso)}
+                }
+            ]
+        },
+        "page_size": 10
+    }
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        if res.status_code == 200:
+            results = res.json().get("results", [])
+            for page in results:
+                props = page.get("properties", {})
+                num_level = props.get("Nível Perfurado", {}).get("number")
+                if num_level is not None and abs(float(num_level) - float(level_broken)) < 0.0001:
+                    return True
+            return False
+        return False
+    except Exception as e:
+        logging.warning(f"⚠️ [NOTION] Erro ao verificar deduplicação para [{symbol} {timestamp_iso}]: {e}")
+        return False
+
 def publish_liquidity_signal_to_notion(signal: Dict[str, Any]) -> bool:
-    """Envia um registo de sinal de liquidez para a database do Notion 'Sinais de Liquidez'"""
+    """Envia um registo de sinal de liquidez para a database do Notion 'Sinais de Liquidez' com deduplicação"""
     db_id = os.getenv("NOTION_LIQUIDITY_DATABASE_ID", "")
     if not NOTION_TOKEN:
         logging.error("❌ NOTION_TOKEN (ou NOTION_API_KEY) não configurado. Impossível publicar no Notion.")
@@ -89,7 +129,21 @@ def publish_liquidity_signal_to_notion(signal: Dict[str, Any]) -> bool:
     if not db_id:
         logging.error("❌ NOTION_LIQUIDITY_DATABASE_ID não configurado nos secrets/ambiente. Impossível publicar no Notion.")
         return False
-        
+
+    symbol = str(signal.get("symbol", ""))
+    timestamp_iso = str(signal.get("timestamp", ""))
+    if " " in timestamp_iso and not "T" in timestamp_iso:
+        timestamp_iso = timestamp_iso.replace(" ", "T")
+    if len(timestamp_iso) == 10:
+        timestamp_iso += "T00:00:00"
+
+    level_broken = float(signal.get("level_broken", 0.0))
+
+    # ── Deduplicação: verificar se o registo já existe no Notion ───────────────
+    if _notion_query_liquidity_signal_exists(db_id, symbol, timestamp_iso, level_broken):
+        logging.info(f"⏭️ [NOTION] Sinal de Liquidez duplicado ignorado: [{symbol} | {timestamp_iso} | Nível {level_broken}]")
+        return False
+
     url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -102,7 +156,7 @@ def publish_liquidity_signal_to_notion(signal: Dict[str, Any]) -> bool:
     try:
         res = requests.post(url, json=payload, headers=headers, timeout=10)
         if res.status_code in [200, 201]:
-            logging.info(f"✅ [NOTION] Sinal de Liquidez publicado no Notion com sucesso para [{signal.get('symbol')}]")
+            logging.info(f"✅ [NOTION] Sinal de Liquidez publicado no Notion com sucesso para [{symbol}]")
             return True
         else:
             logging.error(f"❌ [NOTION] Erro na API do Notion ({res.status_code}): {res.text}")

@@ -50,3 +50,12 @@ jobs:
           MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
         run: |
           python -m unittest discover tests
+
+      - name: Limpeza Preventiva de Duplicados no Notion
+        if: always()
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN || secrets.NOTION_API_KEY }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY || secrets.NOTION_TOKEN }}
+          NOTION_LIQUIDITY_DATABASE_ID: ${{ secrets.NOTION_LIQUIDITY_DATABASE_ID }}
+        run: |
+          python scripts/cleanup_duplicate_notion_signals.py
