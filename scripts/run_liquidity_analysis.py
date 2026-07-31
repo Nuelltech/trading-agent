@@ -32,19 +32,36 @@ def run_liquidity_analysis_pipeline():
 
     for symbol in WATCHLIST_ANALYSIS:
         try:
-            # Buscar histórico diário recente de produção validada (ou yfinance para histórico completo 60d)
-            df = yf.download(symbol, period="3mo", interval="1d", progress=False)
+            # Buscar histórico de produção validada no MySQL
+            try:
+                with engine.connect() as conn:
+                    df = pd.read_sql(
+                        text("""
+                            SELECT timestamp, open_val as open, high_val as high, low_val as low, value as close, volume
+                            FROM indicator_values
+                            WHERE symbol = :symbol
+                            ORDER BY timestamp ASC
+                        """),
+                        conn,
+                        params={"symbol": symbol}
+                    )
+            except Exception as sql_err:
+                logging.warning(f"⚠️ Falha ao ler MySQL para [{symbol}]: {sql_err}. Tentando yfinance...")
+                df = pd.DataFrame()
+
+            # Fallback para yfinance se o MySQL tiver menos de 60 sessões
             if df.empty or len(df) < 60:
-                logging.info(f"⏭️ [{symbol}] Ignorado por possuir menos de 60 sessões (Cold-start ativo).")
+                df = yf.download(symbol, period="3mo", interval="1d", progress=False)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                df = df.reset_index()
+                df.columns = [str(c).lower() for c in df.columns]
+                if 'date' in df.columns:
+                    df.rename(columns={'date': 'timestamp'}, inplace=True)
+
+            if df.empty or len(df) < 60:
+                logging.info(f"⏭️ [{symbol}] Ignorado por possuir apenas {len(df)} sessões (mínimo 60 para ATR_60).")
                 continue
-
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-
-            df = df.reset_index()
-            df.columns = [str(c).lower() for c in df.columns]
-            if 'date' in df.columns:
-                df.rename(columns={'date': 'timestamp'}, inplace=True)
 
             # 1. Analisar Sweeps no Liquidity Engine
             sweeps = analyze_liquidity_sweeps(symbol, df, k_factor=1.5)
