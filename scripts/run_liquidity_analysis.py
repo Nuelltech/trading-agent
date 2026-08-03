@@ -93,4 +93,11 @@ def run_liquidity_analysis_pipeline():
 
 
 if __name__ == "__main__":
-    run_liquidity_analysis_pipeline()
+    try:
+        run_liquidity_analysis_pipeline()
+    finally:
+        try:
+            engine.dispose()
+        except Exception:
+            pass
+

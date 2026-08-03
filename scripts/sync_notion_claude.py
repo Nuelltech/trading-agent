@@ -11,6 +11,7 @@ import sys
 import logging
 
 sys.path.append('backend')
+from app.database import engine
 from app.services.notion_claude_sync_service import (
     sync_claude_ohlc_vigiados,
     sync_claude_close_todos_ativos,
@@ -21,20 +22,26 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 def main():
     logging.info("🚀 Iniciando Sincronização das Databases do Claude no Notion (Adenda v2)...")
-    
-    # 1. OHLC Ativos Vigiados (Fase A Configuração + Fase B Upsert)
-    logging.info("📊 1/3 Syncing 'OHLC Ativos Vigiados — Claude'...")
-    sync_claude_ohlc_vigiados()
+    try:
+        # 1. OHLC Ativos Vigiados (Fase A Configuração + Fase B Upsert)
+        logging.info("📊 1/3 Syncing 'OHLC Ativos Vigiados — Claude'...")
+        sync_claude_ohlc_vigiados()
 
-    # 2. Close Diário — Todos os Ativos (36 indicadores)
-    logging.info("📈 2/3 Syncing 'Close Diário — Todos os Ativos — Claude'...")
-    sync_claude_close_todos_ativos()
+        # 2. Close Diário — Todos os Ativos (36 indicadores)
+        logging.info("📈 2/3 Syncing 'Close Diário — Todos os Ativos — Claude'...")
+        sync_claude_close_todos_ativos()
 
-    # 3. Resumo Diário — Regime de Risco (Linha da Sessão sem tocar no Regime)
-    logging.info("🏛️ 3/3 Syncing 'Resumo Diário — Regime de Risco — Claude'...")
-    sync_claude_resumo_regime()
+        # 3. Resumo Diário — Regime de Risco (Linha da Sessão sem tocar no Regime)
+        logging.info("🏛️ 3/3 Syncing 'Resumo Diário — Regime de Risco — Claude'...")
+        sync_claude_resumo_regime()
 
-    logging.info("🎉 Sincronização de todas as databases do Claude concluída!")
+        logging.info("🎉 Sincronização de todas as databases do Claude concluída!")
+    finally:
+        try:
+            engine.dispose()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()
+

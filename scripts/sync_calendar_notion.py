@@ -22,6 +22,7 @@ import sys
 import logging
 
 sys.path.append('backend')
+from app.database import engine
 from app.services.notion_calendar_sync_service import run_calendar_sync_pipeline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -35,8 +36,15 @@ def main():
     else:
         logging.info("🚀 [MODO: INCREMENTAL] A sincronizar últimos 30d + próximos 90d MySQL → Notion...")
 
-    run_calendar_sync_pipeline(backfill=backfill)
+    try:
+        run_calendar_sync_pipeline(backfill=backfill)
+    finally:
+        try:
+            engine.dispose()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
     main()
+

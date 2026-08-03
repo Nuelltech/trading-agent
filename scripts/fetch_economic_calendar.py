@@ -267,11 +267,18 @@ def save_corporate_earnings(records):
     logging.error("❌ Falha permanente ao salvar earnings após 3 tentativas.")
 
 def main():
-    eco_records = fetch_economic_calendar_fmp()
-    save_economic_events(eco_records)
-    
-    earnings_records = fetch_corporate_earnings_fmp()
-    save_corporate_earnings(earnings_records)
+    try:
+        eco_records = fetch_economic_calendar_fmp()
+        save_economic_events(eco_records)
+        
+        earnings_records = fetch_corporate_earnings_fmp()
+        save_corporate_earnings(earnings_records)
+    finally:
+        try:
+            engine.dispose()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()
+
