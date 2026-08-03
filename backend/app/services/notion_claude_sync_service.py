@@ -171,10 +171,15 @@ def fetch_ticker_ohlc(ticker: str, target_date: Optional[str] = None) -> Optiona
             last_date_str = str(df.index[-1])[:10]
             if last_date_str == target_date:
                 last = df.iloc[-1]
-                ohlc["open"] = float(last.get("Open", last.get("Close", 0.0)))
-                ohlc["high"] = float(last.get("High", last.get("Close", 0.0)))
-                ohlc["low"] = float(last.get("Low", last.get("Close", 0.0)))
-                ohlc["close"] = float(last.get("Close", 0.0))
+                o_val = float(last.get("Open", last.get("Close", 0.0)))
+                c_val = float(last.get("Close", 0.0))
+                h_val = float(last.get("High", c_val))
+                l_val = float(last.get("Low", c_val))
+
+                ohlc["open"] = o_val
+                ohlc["close"] = c_val
+                ohlc["high"] = max(h_val, o_val, c_val)
+                ohlc["low"] = min(l_val, o_val, c_val) if l_val > 0 else min(o_val, c_val)
                 return ohlc
             else:
                 logging.info(f"ℹ️ [{ticker}] Sessão de hoje ({target_date}) ainda não iniciada. Dados mais recentes do yfinance são de {last_date_str}.")
@@ -182,6 +187,7 @@ def fetch_ticker_ohlc(ticker: str, target_date: Optional[str] = None) -> Optiona
         logging.warning(f"Falha yfinance para [{ticker}]: {ex}")
 
     return None
+
 
 
 # -----------------------------------------------------------------------------

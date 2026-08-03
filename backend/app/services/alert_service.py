@@ -92,8 +92,11 @@ def send_email_alert(subject: str, message: str) -> bool:
                 if resp.status_code in [200, 201]:
                     logging.info(f"✅ Alerta enviado com sucesso via Resend HTTPS API para {ALERT_EMAIL_TO}.")
                     return True
+                else:
+                    logging.warning(f"⚠️ Resend HTTPS API recusou (HTTP {resp.status_code}): {resp.text}")
             except Exception as r_err:
                 logging.warning(f"⚠️ Resend HTTPS API falhou: {r_err}")
+
 
         logging.error("❌ Erro permanente ao enviar alerta por Email em todas as portas SMTP (465 e 587) e HTTPS API.")
         return False
@@ -160,8 +163,10 @@ def check_quarantine_sla_violations(hours_threshold: int = 12) -> int:
                 alert_msg = f"⚠️ ALERTA SLA QUARENTENA: Dados em falta para [{symbol}] há {hours_pending:.1f} horas (Status: PENDING | Tipo: {anomaly_type})"
                 send_alert_notification(alert_msg)
                 violations += 1
+            return violations
                 
     except Exception as e:
         logging.error(f"Erro ao verificar SLA de quarentena: {e}")
+        return -1
         
     return violations
