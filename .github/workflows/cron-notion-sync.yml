@@ -48,6 +48,7 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM || secrets.SMTP_USERNAME }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: |
           python scripts/sync_notion_claude.py
           python scripts/run_liquidity_analysis.py

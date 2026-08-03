@@ -41,6 +41,7 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM || secrets.SMTP_USERNAME }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN || secrets.NOTION_API_KEY }}
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY || secrets.NOTION_TOKEN }}
           NOTION_LIQUIDITY_DATABASE_ID: ${{ secrets.NOTION_LIQUIDITY_DATABASE_ID }}
