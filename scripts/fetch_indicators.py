@@ -262,4 +262,15 @@ def main():
     save_records_to_db(total_records)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logging.error(f"❌ Erro fatal no pipeline de indicadores: {e}")
+        raise
+    finally:
+        # Fechar pool de conexões graciosamente para evitar ConnectionResetError
+        # cosmético ao encerrar o processo (MySQL server has gone away)
+        try:
+            engine.dispose()
+        except Exception:
+            pass
