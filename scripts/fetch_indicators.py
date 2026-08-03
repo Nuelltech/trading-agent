@@ -155,16 +155,6 @@ def fetch_fred_data():
         except Exception as e:
             logging.error(f"Erro ao buscar FRED series {series_id}: {e}")
             
-    if not records:
-        logging.info("Carregando valores oficiais de referência para Yields Soberanas FRED (DGS2, Bund, Gilt, JGB)...")
-        today_str = datetime.utcnow().strftime("%Y-%m-%d 00:00:00")
-        records = [
-            {"symbol": "DGS2", "name": "US 2Y Treasury Yield", "timestamp": today_str, "value": 4.15, "open_val": 4.15, "high_val": 4.15, "low_val": 4.15, "volume": 0, "provider": "FRED_OFFICIAL"},
-            {"symbol": "IRLTLT01DEM156N", "name": "Bund Alemão 10Y Yield", "timestamp": today_str, "value": 2.55, "open_val": 2.55, "high_val": 2.55, "low_val": 2.55, "volume": 0, "provider": "FRED_OFFICIAL"},
-            {"symbol": "IRLTLT01GBM156N", "name": "Gilt UK 10Y Yield", "timestamp": today_str, "value": 4.12, "open_val": 4.12, "high_val": 4.12, "low_val": 4.12, "volume": 0, "provider": "FRED_OFFICIAL"},
-            {"symbol": "IRLTLT01JPM156N", "name": "JGB Japonês 10Y Yield", "timestamp": today_str, "value": 1.05, "open_val": 1.05, "high_val": 1.05, "low_val": 1.05, "volume": 0, "provider": "FRED_OFFICIAL"},
-        ]
-
     return records
 
 def save_records_to_db(records):
