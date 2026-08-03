@@ -115,7 +115,13 @@ def analyze_liquidity_sweeps(symbol: str, df: pd.DataFrame, k_factor: float = 1.
     
     # Cap do ATR60: min(atr14, 1.5 * atr60)
     df['atr60_capped'] = df[['atr14', 'atr60']].apply(lambda r: min(r['atr14'], 1.5 * r['atr60']), axis=1)
-    df['threshold'] = k_factor * df['atr60_capped']
+    
+    # Calibração por classe de ativo (Adenda Consultor 1: K=1.0 para Brent/WTI devido à amplitude de pavios diários)
+    effective_k = k_factor
+    if k_factor == 1.5 and symbol in {"BZ=F", "CL=F"}:
+        effective_k = 1.0
+
+    df['threshold'] = effective_k * df['atr60_capped']
     
     # 3. Deteção dos Fractais
     swing_highs, swing_lows = detect_swing_fractals(df, n=3)

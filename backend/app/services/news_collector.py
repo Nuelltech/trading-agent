@@ -66,12 +66,15 @@ NOTION_HEADERS = {
 # Máximo de dias para filtrar notícias (backfill inicial = 7 dias)
 BACKFILL_DAYS = 7
 
-# Filtro de Exclusão — Ruído de Finanças Pessoais
+# Filtro de Exclusão — Ruído de Finanças Pessoais & Cartões de Crédito
 PALAVRAS_EXCLUSAO = [
     "mortgage rate", "cd rate", "savings rate", "heloc",
     "refinance", "home equity loan", "apy return", "best high-yield",
     "refinance interest rate", "mortgage rate predictions", "best cd rates",
-    "home equity", "personal finance", "savings account", "checking account"
+    "home equity", "personal finance", "savings account", "checking account",
+    "chase sapphire", "credit card", "credit cards", "rewards card", "no savings",
+    "financial advice", "budgeting", "student loan", "car loan", "rewards credit card",
+    "cash back card", "best credit card", "travel card"
 ]
 
 PALAVRAS_GEOPOLITICAS = [
@@ -84,6 +87,13 @@ PALAVRAS_EARNINGS = [
     "earnings", "results", "revenue", "profit", "eps", "guidance",
     "quarterly", "beat", "miss", "outlook", "forecast"
 ]
+
+# Tickers de Índices e Macro que NUNCA são "Empresa Específica"
+MACRO_INDEX_TICKERS = {
+    "^NDX", "^GSPC", "^VIX", "^SOX", "^STOXX50E", "^TNX", "^TYX", "^DJI", "^RUT",
+    "DX-Y.NYB", "DGS2", "GC=F", "BZ=F", "CL=F", "HG=F", "SI=F", "NG=F", "TLT",
+    "EURUSD=X", "USDJPY=X", "GBPUSD=X", "USDCNH=X", "USDCHF=X"
+}
 
 # Nomes de fallback e aliases expandidos para correspondência de texto em títulos e resumos
 DEFAULT_TICKER_NAMES = {
@@ -163,7 +173,15 @@ def detetar_tickers_mencionados(texto: str, watchlist_map: Dict[str, str]) -> Li
     texto_lower = texto.lower()
     mencionados = []
 
+    # Se o texto é sobre Crypto (bitcoin, xrp, ethereum, etc.), ignorar match acidental de ^GSPC por frases de rodapé
+    is_crypto_article = any(c_kw in texto_lower for c_kw in ["bitcoin", "xrp", "crypto", "cryptocurrency", "ethereum", "solana"])
+
     for ticker, nome_empresa in watchlist_map.items():
+        if ticker == "^GSPC" and is_crypto_article:
+            # Só aceitar ^GSPC em artigos de crypto se "s&p 500" ou "sp500" estiver no próprio título
+            if "s&p 500" not in texto_lower and "sp500" not in texto_lower:
+                continue
+
         matched = False
 
         # 1. Match por aliases configurados (ex: "chip stocks", "sox", "gold", "10-year yield", "nasdaq")
@@ -429,9 +447,12 @@ def categorizar_noticia(ticker_relacionado: str, texto_titulo: str) -> str:
     if any(p in titulo_lower for p in PALAVRAS_GEOPOLITICAS):
         return "Geopolítico"
 
-    # 4. Empresa Específica (se tem ticker relacionado)
+    # 4. Empresa Específica (se tem ticker relacionado de empresa individual)
     if ticker_relacionado:
-        return "Empresa Específica"
+        tickers = [t.strip() for t in ticker_relacionado.split(",") if t.strip()]
+        has_equity_stock = any(t not in MACRO_INDEX_TICKERS for t in tickers)
+        if has_equity_stock:
+            return "Empresa Específica"
 
     # 5. Default
     return "Macro Geral"

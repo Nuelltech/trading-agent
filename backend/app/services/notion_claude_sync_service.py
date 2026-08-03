@@ -141,10 +141,30 @@ def fetch_ticker_ohlc(ticker: str, target_date: Optional[str] = None) -> Optiona
                 ohlc["low"] = float(row[2] or row[3])
                 ohlc["close"] = float(row[3])
                 return ohlc
+
+            # 1b. Fallback para séries FRED / Obrigações Soberanas (dados mensais/diferidos): usar último valor registado na DB
+            if ticker.startswith("IRLTLT01") or ticker in ["DGS2", "VSTOXX"]:
+                sql_latest = text("""
+                    SELECT open_val, high_val, low_val, value 
+                    FROM indicator_values 
+                    WHERE symbol = :ticker 
+                    ORDER BY timestamp DESC LIMIT 1
+                """)
+                latest_row = conn.execute(sql_latest, {"ticker": ticker}).fetchone()
+                if latest_row and latest_row[3] is not None:
+                    ohlc["open"] = float(latest_row[0] or latest_row[3])
+                    ohlc["high"] = float(latest_row[1] or latest_row[3])
+                    ohlc["low"] = float(latest_row[2] or latest_row[3])
+                    ohlc["close"] = float(latest_row[3])
+                    logging.info(f"ℹ️ [{ticker}] Usando último valor FRED disponível na DB (Close={ohlc['close']}).")
+                    return ohlc
     except Exception as e:
         logging.warning(f"⚠️ Erro no MySQL para [{ticker}]: {e}.")
 
-    # 2. Fallback via yfinance garantindo que a data da última barra coincide com target_date
+    # 2. Fallback via yfinance (apenas para ativos Yahoo Finance, ignorando séries FRED)
+    if ticker.startswith("IRLTLT01") or ticker in ["DGS2", "VSTOXX"]:
+        return None
+
     try:
         df = yf.Ticker(ticker).history(period="5d")
         if not df.empty:

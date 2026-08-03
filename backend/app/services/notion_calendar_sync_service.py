@@ -249,7 +249,18 @@ def upsert_economic_event(row: Dict[str, Any]) -> str:
 
     # Criar nova página completa
     event_date = row.get("event_timestamp")
-    date_str = str(event_date)[:10] if event_date else None  # YYYY-MM-DD
+    if isinstance(event_date, datetime):
+        date_str = event_date.strftime("%Y-%m-%d Distribution").replace(" Distribution", "") if event_date.hour == 0 and event_date.minute == 0 and event_date.second == 0 else event_date.strftime("%Y-%m-%dT%H:%M:%S")
+    elif event_date:
+        es = str(event_date).strip()
+        if " " in es:
+            date_str = es.replace(" ", "T")
+        elif "T" in es:
+            date_str = es
+        else:
+            date_str = es[:10]
+    else:
+        date_str = None
 
     full_props: Dict[str, Any] = {
         "Evento": {

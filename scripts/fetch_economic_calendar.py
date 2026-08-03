@@ -71,9 +71,9 @@ OFFICIAL_REAL_SCHEDULE_2026 = [
     {"event_name": "UK CPI (YoY)", "country": "Reino Unido", "currency": "GBP", "event_timestamp": "2026-08-19 06:00:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 2.0, "previous_val": 2.0, "unit": "%", "source_provider": "ONS_OFFICIAL"},
     
     # Japão & China (Datas Reais BoJ / PBoC / NBS)
-    {"event_name": "BoJ Interest Rate Decision", "country": "Japão", "currency": "JPY", "event_timestamp": "2026-07-31 03:00:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 0.15, "previous_val": 0.10, "unit": "%", "source_provider": "BOJ_OFFICIAL"},
+    {"event_name": "BoJ Interest Rate Decision", "country": "Japão", "currency": "JPY", "event_timestamp": "2026-07-31 03:00:00", "impact_level": "HIGH", "actual_val": 1.0, "forecast_val": 1.0, "previous_val": 0.50, "unit": "%", "source_provider": "BOJ_OFFICIAL"},
     {"event_name": "China Caixin Manufacturing PMI", "country": "China", "currency": "CNY", "event_timestamp": "2026-08-03 01:45:00", "impact_level": "MEDIUM", "actual_val": None, "forecast_val": 51.5, "previous_val": 51.8, "unit": "Index", "source_provider": "CAIXIN_OFFICIAL"},
-    {"event_name": "China Official NBS Manufacturing PMI", "country": "China", "currency": "CNY", "event_timestamp": "2026-07-31 01:30:00", "impact_level": "MEDIUM", "actual_val": None, "forecast_val": 49.6, "previous_val": 49.5, "unit": "Index", "source_provider": "NBS_OFFICIAL"},
+    {"event_name": "China Official NBS Manufacturing PMI", "country": "China", "currency": "CNY", "event_timestamp": "2026-07-31 01:30:00", "impact_level": "MEDIUM", "actual_val": 49.4, "forecast_val": 49.6, "previous_val": 49.5, "unit": "Index", "source_provider": "NBS_OFFICIAL"},
     {"event_name": "PBoC LPR 1-Year Rate Decision", "country": "China", "currency": "CNY", "event_timestamp": "2026-08-20 01:15:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 3.45, "previous_val": 3.45, "unit": "%", "source_provider": "PBOC_OFFICIAL"}
 ]
 
@@ -212,15 +212,18 @@ def save_economic_events(records):
                         (event_name, country, currency, event_timestamp, impact_level, actual_val, forecast_val, previous_val, unit, source_provider)
                         VALUES (:event_name, :country, :currency, :event_timestamp, :impact_level, :actual_val, :forecast_val, :previous_val, :unit, :source_provider)
                         ON DUPLICATE KEY UPDATE 
-                            actual_val = VALUES(actual_val),
-                            forecast_val = VALUES(forecast_val),
-                            previous_val = VALUES(previous_val),
+                            actual_val = COALESCE(VALUES(actual_val), economic_calendar.actual_val),
+                            forecast_val = COALESCE(VALUES(forecast_val), economic_calendar.forecast_val),
+                            previous_val = COALESCE(VALUES(previous_val), economic_calendar.previous_val),
                             impact_level = VALUES(impact_level),
                             source_provider = VALUES(source_provider);
                     """)
                     conn.execute(sql, r)
                     saved += 1
                 trans.commit()
+                from app.services.data_validator import auto_resolve_anomalies
+                for r in valid_records:
+                    auto_resolve_anomalies("economic_calendar", r["event_name"])
                 logging.info(f"🎉 {saved} eventos validados e salvos na tabela 'economic_calendar'!")
                 return
         except Exception as e:

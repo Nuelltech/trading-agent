@@ -16,9 +16,20 @@ from app.database import engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+SMTP_SERVER = os.getenv("SMTP_SERVER", "")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO", "")
+ALERT_EMAIL_FROM = os.getenv("ALERT_EMAIL_FROM", SMTP_USERNAME or "alerts@tradingagent.local")
 
 def format_sweep_alert(sweep_event: dict) -> str:
     """Formata o alerta de sweep de acordo com a norma da Secção 6.1"""
@@ -33,8 +44,37 @@ def format_sweep_alert(sweep_event: dict) -> str:
     alert_msg = f"[SWEEP ALERT] {symbol} | {tipo_str} ${level:.2f} perfurado | Pavio {ratio}x threshold | {timestamp}"
     return alert_msg
 
+def send_email_alert(subject: str, message: str) -> bool:
+    """Envia alerta por Email via SMTP (STARTTLS) ou SMTP_SSL (Porta 465)."""
+    if not (SMTP_SERVER and ALERT_EMAIL_TO):
+        return False
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = ALERT_EMAIL_FROM or SMTP_USERNAME
+        msg["To"] = ALERT_EMAIL_TO
+        msg["Subject"] = f"🚨 Trading Agent: {subject}"
+        msg.attach(MIMEText(message, "plain", "utf-8"))
+
+        if int(SMTP_PORT) == 465:
+            with smtplib.SMTP_SSL(SMTP_SERVER, int(SMTP_PORT), timeout=10) as server:
+                if SMTP_USERNAME and SMTP_PASSWORD:
+                    server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(SMTP_SERVER, int(SMTP_PORT), timeout=10) as server:
+                server.starttls()
+                if SMTP_USERNAME and SMTP_PASSWORD:
+                    server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                server.send_message(msg)
+
+        logging.info(f"✅ Alerta enviado com sucesso para email {ALERT_EMAIL_TO}.")
+        return True
+    except Exception as e:
+        logging.error(f"Erro ao enviar alerta por Email: {e}")
+        return False
+
 def send_alert_notification(message: str) -> bool:
-    """Envia o alerta para Discord Webhook e/ou Telegram Bot (se configurados)"""
+    """Envia o alerta para Discord Webhook, Telegram Bot e/ou Email (se configurados)"""
     logging.info(f"📢 ALERTA ANALÍTICO DISPARADO: {message}")
     sent = False
     
@@ -59,6 +99,11 @@ def send_alert_notification(message: str) -> bool:
                 sent = True
         except Exception as e:
             logging.error(f"Erro ao enviar alerta para Telegram: {e}")
+
+    # 3. Enviar por Email (SMTP)
+    if SMTP_SERVER and ALERT_EMAIL_TO:
+        if send_email_alert("Alerta Analítico de Mercado", message):
+            sent = True
 
     return sent
 

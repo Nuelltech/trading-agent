@@ -42,6 +42,12 @@ jobs:
           NOTION_CLAUDE_CLOSE_DATABASE_ID: ${{ secrets.NOTION_CLAUDE_CLOSE_DATABASE_ID }}
           NOTION_CLAUDE_REGIME_DATABASE_ID: ${{ secrets.NOTION_CLAUDE_REGIME_DATABASE_ID || secrets.NOTION_PAINEL_MERCADO_DATABASE_ID }}
           NOTION_CALENDAR_DB_ID: ${{ secrets.NOTION_CALENDAR_DB_ID }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM || secrets.SMTP_USERNAME }}
         run: |
           python scripts/sync_notion_claude.py
           python scripts/run_liquidity_analysis.py

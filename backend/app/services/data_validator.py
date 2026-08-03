@@ -158,9 +158,9 @@ def validate_ohlc_record(record: Dict[str, Any]) -> Tuple[bool, Dict[str, Any], 
     """
     symbol = record.get("symbol")
     value = float(record.get("value", 0.0))
-    open_val = float(record.get("open_val", value))
-    high_val = float(record.get("high_val", value))
-    low_val = float(record.get("low_val", value))
+    open_val = float(record.get("open_val", value)) if record.get("open_val") is not None else value
+    high_val = float(record.get("high_val", value)) if record.get("high_val") is not None else value
+    low_val = float(record.get("low_val", value)) if record.get("low_val") is not None else value
 
     # 1. Verificação de Plausibilidade Rígida (Sem mutação silenciosa de escala - Regra estrita do Consultor 1)
     if symbol in PLAUSIBILITY_LIMITS:
@@ -170,7 +170,7 @@ def validate_ohlc_record(record: Dict[str, Any]) -> Tuple[bool, Dict[str, Any], 
             log_anomaly("indicator_values", symbol, value, f"[{limits['min']}, {limits['max']}]", "OUTOFBOUNDS_PLAUSIBILITY", msg)
             return False, record, msg
 
-    # 3. Regra Matemática Universal OHLC (low <= open/close <= high)
+    # 3. Regra Matemática Universal OHLC (low <= min(open, close) <= max(open, close) <= high)
     sanitized_high = max(high_val, open_val, value)
     sanitized_low = min(low_val, open_val, value)
 
@@ -265,12 +265,7 @@ def validate_economic_calendar_records(records: List[Dict[str, Any]]) -> Tuple[L
 def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: float, novo_low: float, novo_close: float, volume: int = 0) -> Dict[str, Any]:
     """
     Promove uma cotação para a tabela de produção `indicator_values` com lógica de Upsert.
-    Regras de Negócio (Adenda Bug de Congelamento):
-    1. open_val NUNCA é reescrito após a primeira inserção do dia (preserva o Open do início do dia).
-    2. high_val = max(linha_existente.high_val, novo_high)
-    3. low_val = min(linha_existente.low_val, novo_low)
-    4. value (close_val) = novo_close (sempre o valor mais recente)
-    5. volume = max(linha_existente.volume, novo_volume)
+    Garante integridade matemática estrita de OHLC (High >= max(Open, Close) e Low <= min(Open, Close)).
     """
     ts = str(data)[:10] + " 00:00:00" if len(str(data)) <= 10 else str(data)
     
@@ -287,22 +282,26 @@ def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: 
                 query_prod = text("SELECT id, open_val, high_val, low_val, value, volume FROM indicator_values WHERE symbol = :symbol AND timestamp = :ts")
                 existing = conn.execute(query_prod, {"symbol": ticker, "ts": ts}).fetchone()
 
+                novo_open_f = float(novo_open) if novo_open is not None else float(novo_close)
+                novo_high_f = float(novo_high) if novo_high is not None else float(novo_close)
+                novo_low_f = float(novo_low) if novo_low is not None else float(novo_close)
+                novo_close_f = float(novo_close)
+
                 if existing:
                     ext_id, ext_open, ext_high, ext_low, ext_val, ext_vol = existing
                     
-                    # Regra 1: Open NUNCA muda
-                    # Regra 2: High é o máximo
-                    high_final = max(float(ext_high if ext_high is not None else novo_high), float(novo_high))
-                    # Regra 3: Low é o mínimo
-                    ext_low_f = float(ext_low) if ext_low is not None else 0.0
-                    novo_low_f = float(novo_low)
-                    if ext_low_f > 0 and novo_low_f > 0:
-                        low_final = min(ext_low_f, novo_low_f)
-                    else:
-                        low_final = novo_low_f if novo_low_f > 0 else ext_low_f
-                    # Regra 4: Close é o mais recente
-                    close_final = float(novo_close)
-                    # Volume é o máximo
+                    open_final = float(ext_open) if ext_open is not None else novo_open_f
+                    close_final = novo_close_f
+                    
+                    # Regra Matemática Absoluta: High é sempre o máximo de todos os pontos conhecidos da sessão
+                    raw_high = max(float(ext_high if ext_high is not None else novo_high_f), novo_high_f)
+                    high_final = max(raw_high, open_final, close_final)
+                    
+                    # Regra Matemática Absoluta: Low é sempre o mínimo de todos os pontos conhecidos da sessão
+                    ext_low_f = float(ext_low) if ext_low is not None else novo_low_f
+                    raw_low = min(ext_low_f, novo_low_f) if (ext_low_f > 0 and novo_low_f > 0) else (novo_low_f if novo_low_f > 0 else ext_low_f)
+                    low_final = min(raw_low, open_final, close_final)
+                    
                     vol_final = max(int(ext_vol or 0), int(volume or 0))
 
                     sql_update = text("""
@@ -321,13 +320,18 @@ def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: 
                     auto_resolve_anomalies("indicator_values", ticker)
                     return {
                         "status": "updated",
-                        "open_val": float(ext_open if ext_open is not None else novo_open),
+                        "open_val": open_final,
                         "high_val": high_final,
                         "low_val": low_final,
                         "value": close_final,
                         "volume": vol_final
                     }
                 else:
+                    open_final = novo_open_f
+                    close_final = novo_close_f
+                    high_final = max(novo_high_f, open_final, close_final)
+                    low_final = min(novo_low_f, open_final, close_final)
+
                     sql_insert = text("""
                         INSERT INTO indicator_values 
                         (indicator_id, symbol, timestamp, value, open_val, high_val, low_val, volume)
@@ -337,20 +341,20 @@ def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: 
                         "indicator_id": indicator_id,
                         "symbol": ticker,
                         "ts": ts,
-                        "value": float(novo_close),
-                        "open_val": float(novo_open),
-                        "high_val": float(novo_high),
-                        "low_val": float(novo_low),
+                        "value": close_final,
+                        "open_val": open_final,
+                        "high_val": high_final,
+                        "low_val": low_final,
                         "volume": int(volume or 0)
                     })
                     trans.commit()
                     auto_resolve_anomalies("indicator_values", ticker)
                     return {
                         "status": "inserted",
-                        "open_val": float(novo_open),
-                        "high_val": float(novo_high),
-                        "low_val": float(novo_low),
-                        "value": float(novo_close),
+                        "open_val": open_final,
+                        "high_val": high_final,
+                        "low_val": low_final,
+                        "value": close_final,
                         "volume": int(volume or 0)
                     }
             except Exception as e:
@@ -360,3 +364,42 @@ def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: 
     except Exception as e:
         logging.error(f"Erro de conexão ao promover {ticker} para produção: {e}")
         return {"status": "error", "message": str(e)}
+
+
+def calcular_percentil(vix_hoje: float, historico_vix: List[float]) -> float:
+    """Calcula a posição percentil (0 a 100) do valor VIX em relação ao histórico fornecido."""
+    if not historico_vix:
+        return 50.0
+    abaixo = sum(1 for v in historico_vix if v < vix_hoje)
+    iguais = sum(1 for v in historico_vix if v == vix_hoje)
+    percentil = ((abaixo + 0.5 * iguais) / len(historico_vix)) * 100.0
+    return max(0.0, min(100.0, percentil))
+
+
+def classificar_vix_percentil(vix_hoje: float, historico_vix: List[float], minimo_sessoes: int = 60) -> Tuple[str, str]:
+    """
+    Classificação do Regime de VIX por Percentil (Especificação Consultor 1).
+    - Janela expansível até 252 sessões.
+    - Se len(historico_vix) < minimo_sessoes: Cold-Start com limiares fixos.
+    - percentil < 40: "Baixa Vol"
+    - percentil <= 85: "Transição"
+    - percentil > 85: "Pânico"
+    """
+    if len(historico_vix) < minimo_sessoes:
+        note = "Cold-Start (Percentil Indisponível)"
+        if vix_hoje < 15.0:
+            return "Baixa Vol", note
+        elif vix_hoje <= 20.0:
+            return "Transição", note
+        else:
+            return "Pânico", note
+
+    percentil = calcular_percentil(vix_hoje, historico_vix[:252])
+    label_percentil = f"Percentil {percentil:.0f}"
+    
+    if percentil < 40.0:
+        return "Baixa Vol", label_percentil
+    elif percentil <= 85.0:
+        return "Transição", label_percentil
+    else:
+        return "Pânico", label_percentil
