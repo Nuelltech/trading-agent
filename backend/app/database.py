@@ -8,14 +8,19 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Create engine
+# Create engine with connection pooling to avoid Hostinger's
+# rate limit of ~20 new connections/second on shared hosting.
+# Connections are reused from the pool instead of creating new ones per query.
 engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,
-    pool_recycle=3600,
-    connect_args={"connect_timeout": 5},
+    pool_recycle=1800,
+    pool_size=5,
+    max_overflow=10,
+    connect_args={"connect_timeout": 15},
     echo=settings.ENVIRONMENT == "development"
 )
+
 
 # Session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
