@@ -79,7 +79,23 @@ def send_email_alert(subject: str, message: str) -> bool:
             except Exception as port_err:
                 logging.warning(f"⚠️ Tentativa SMTP na Porta {port} falhou ({port_err}). Tentando porta alternativa...")
 
-        logging.error("❌ Erro permanente ao enviar alerta por Email em todas as portas SMTP (465 e 587).")
+        # Fallback via HTTPS API (Resend API - Porta 443 HTTPS imune a bloqueios de cloud firewall)
+        resend_key = os.getenv("RESEND_API_KEY", "")
+        if resend_key:
+            try:
+                resp = requests.post(
+                    "https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+                    json={"from": ALERT_EMAIL_FROM or "onboarding@resend.dev", "to": [ALERT_EMAIL_TO], "subject": f"🚨 Trading Agent: {subject}", "text": message},
+                    timeout=5
+                )
+                if resp.status_code in [200, 201]:
+                    logging.info(f"✅ Alerta enviado com sucesso via Resend HTTPS API para {ALERT_EMAIL_TO}.")
+                    return True
+            except Exception as r_err:
+                logging.warning(f"⚠️ Resend HTTPS API falhou: {r_err}")
+
+        logging.error("❌ Erro permanente ao enviar alerta por Email em todas as portas SMTP (465 e 587) e HTTPS API.")
         return False
     except Exception as e:
         logging.error(f"Erro ao enviar alerta por Email: {e}")
