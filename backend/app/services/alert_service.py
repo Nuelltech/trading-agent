@@ -45,7 +45,7 @@ def format_sweep_alert(sweep_event: dict) -> str:
     return alert_msg
 
 def send_email_alert(subject: str, message: str) -> bool:
-    """Envia alerta por Email via SMTP (STARTTLS) ou SMTP_SSL (Porta 465)."""
+    """Envia alerta por Email via SMTP. Tenta Porta 465 (SSL) e 587 (STARTTLS) com fallback automático."""
     if not (SMTP_SERVER and ALERT_EMAIL_TO):
         return False
     try:
@@ -55,20 +55,32 @@ def send_email_alert(subject: str, message: str) -> bool:
         msg["Subject"] = f"🚨 Trading Agent: {subject}"
         msg.attach(MIMEText(message, "plain", "utf-8"))
 
-        if int(SMTP_PORT) == 465:
-            with smtplib.SMTP_SSL(SMTP_SERVER, int(SMTP_PORT), timeout=10) as server:
-                if SMTP_USERNAME and SMTP_PASSWORD:
-                    server.login(SMTP_USERNAME, SMTP_PASSWORD)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(SMTP_SERVER, int(SMTP_PORT), timeout=10) as server:
-                server.starttls()
-                if SMTP_USERNAME and SMTP_PASSWORD:
-                    server.login(SMTP_USERNAME, SMTP_PASSWORD)
-                server.send_message(msg)
+        ports_to_try = [int(SMTP_PORT)]
+        if int(SMTP_PORT) == 465 and 587 not in ports_to_try:
+            ports_to_try.append(587)
+        elif int(SMTP_PORT) == 587 and 465 not in ports_to_try:
+            ports_to_try.append(465)
 
-        logging.info(f"✅ Alerta enviado com sucesso para email {ALERT_EMAIL_TO}.")
-        return True
+        for port in ports_to_try:
+            try:
+                if port == 465:
+                    with smtplib.SMTP_SSL(SMTP_SERVER, port, timeout=5) as server:
+                        if SMTP_USERNAME and SMTP_PASSWORD:
+                            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                        server.send_message(msg)
+                else:
+                    with smtplib.SMTP(SMTP_SERVER, port, timeout=5) as server:
+                        server.starttls()
+                        if SMTP_USERNAME and SMTP_PASSWORD:
+                            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                        server.send_message(msg)
+                logging.info(f"✅ Alerta enviado com sucesso via SMTP (Porta {port}) para email {ALERT_EMAIL_TO}.")
+                return True
+            except Exception as port_err:
+                logging.warning(f"⚠️ Tentativa SMTP na Porta {port} falhou ({port_err}). Tentando porta alternativa...")
+
+        logging.error("❌ Erro permanente ao enviar alerta por Email em todas as portas SMTP (465 e 587).")
+        return False
     except Exception as e:
         logging.error(f"Erro ao enviar alerta por Email: {e}")
         return False

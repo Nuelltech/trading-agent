@@ -63,7 +63,9 @@ def auto_resolve_anomalies(target_table: str, symbol_or_event: str):
     """
     Auto-resolução de anomalias pendentes: quando um novo registo válido é promovido
     para a produção, as anomalias pendentes desse símbolo/evento são marcadas como RESOLVED_APPROVED.
+    Mapeia também variações do nome do evento (ex: 'US Core CPI (MoM)' -> 'US Core CPI').
     """
+    clean_symbol = symbol_or_event.split(" (")[0].strip() if " (" in symbol_or_event else symbol_or_event.strip()
     try:
         with engine.begin() as conn:
             conn.execute(text("""
@@ -71,9 +73,13 @@ def auto_resolve_anomalies(target_table: str, symbol_or_event: str):
                 SET status = 'RESOLVED_APPROVED', 
                     last_seen = NOW()
                 WHERE target_table = :target_table 
-                  AND symbol_or_event = :symbol_or_event 
+                  AND (
+                    symbol_or_event = :symbol_or_event 
+                    OR symbol_or_event = :clean_symbol
+                    OR symbol_or_event LIKE CONCAT(:clean_symbol, '%')
+                  )
                   AND status = 'PENDING'
-            """), {"target_table": target_table, "symbol_or_event": symbol_or_event})
+            """), {"target_table": target_table, "symbol_or_event": symbol_or_event, "clean_symbol": clean_symbol})
     except Exception as e:
         logging.debug(f"Não foi possível auto-resolver anomalias para {symbol_or_event}: {e}")
 
