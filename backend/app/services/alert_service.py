@@ -27,7 +27,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 SMTP_SERVER = os.getenv("SMTP_SERVER_HOSTINGER", "").strip() or os.getenv("SMTP_SERVER", "").strip()
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_PASSWORD = os.getenv("SMTP_HOSTINGER_PASSWD", "").strip() or os.getenv("SMTP_PASSWORD", "").strip()
 ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO", "")
 ALERT_EMAIL_FROM = os.getenv("ALERT_EMAIL_FROM", SMTP_USERNAME or "alerts@tradingagent.local")
 

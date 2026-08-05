@@ -33,7 +33,8 @@ jobs:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER_HOSTINGER || secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT || '465' }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_HOSTINGER_PASSWD: ${{ secrets.SMTP_HOSTINGER_PASSWD }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_HOSTINGER_PASSWD || secrets.SMTP_PASSWORD }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           DEBUG_SMTP: '1'
         run: |

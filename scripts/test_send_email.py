@@ -53,7 +53,7 @@ def test_plano_a_smtp() -> bool:
     smtp_server = os.getenv("SMTP_SERVER_HOSTINGER", "").strip() or os.getenv("SMTP_SERVER", "").strip()
     smtp_port_str = os.getenv("SMTP_PORT", "465").strip()
     smtp_username = os.getenv("SMTP_USERNAME", "").strip()
-    smtp_password = os.getenv("SMTP_PASSWORD", "").strip()
+    smtp_password = os.getenv("SMTP_HOSTINGER_PASSWD", "").strip() or os.getenv("SMTP_PASSWORD", "").strip()
     email_to = os.getenv("ALERT_EMAIL_TO", "").strip()
     email_from = os.getenv("ALERT_EMAIL_FROM", smtp_username).strip()
 
