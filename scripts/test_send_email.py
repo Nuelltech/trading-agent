@@ -2,12 +2,14 @@
 """
 Script de Teste de Envio de Email - Hello World
 Testa os dois planos de contingência do Trading Agent:
-- Plano A: Envio SMTP direto (Servidor Nuelltech/Hostinger - Portas 465/587)
+- Plano A: Envio SMTP direto (Servidor Nuelltech/Hostinger - Portas 465/587/2525)
 - Plano B: Envio via Resend API (HTTPS REST API - Porta 443)
 """
 
 import os
 import sys
+import socket
+import ssl
 import argparse
 import logging
 import smtplib
@@ -29,10 +31,23 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 
+def test_socket_connectivity(host: str, port: int, timeout: float = 10.0) -> tuple[bool, str]:
+    """Testa conectividade TCP direta na porta antes de iniciar protocolo SMTP"""
+    try:
+        ip = socket.gethostbyname(host)
+        with socket.create_connection((host, port), timeout=timeout):
+            return True, f"Conexão TCP estabelecida com sucesso com {host} ({ip}):{port}"
+    except socket.gaierror as dns_err:
+        return False, f"Falha na resolução de DNS para '{host}': {dns_err}"
+    except socket.timeout:
+        return False, f"Timeout ({timeout}s) ao tentar conectar TCP a '{host}':{port} (Porta pode estar bloqueada por firewall/provedor)"
+    except Exception as err:
+        return False, f"Erro de soquete ao conectar a '{host}':{port} -> {err}"
+
 def test_plano_a_smtp() -> bool:
     """Testa envio de email via SMTP (Servidor Nuelltech / Hostinger)"""
     logging.info("=" * 60)
-    logging.info("📧 PLANO A: Testando Envio de Email via SMTP (Servidor Nuelltech)")
+    logging.info("📧 PLANO A: Testando Envio de Email via SMTP (Servidor Nuelltech / Hostinger)")
     logging.info("=" * 60)
 
     smtp_server = os.getenv("SMTP_SERVER", "").strip()
@@ -42,7 +57,7 @@ def test_plano_a_smtp() -> bool:
     email_to = os.getenv("ALERT_EMAIL_TO", "").strip()
     email_from = os.getenv("ALERT_EMAIL_FROM", smtp_username).strip()
 
-    logging.info(f"📍 Servidor SMTP: '{smtp_server}'")
+    logging.info(f"📍 Servidor SMTP Configurado: '{smtp_server}'")
     logging.info(f"🔌 Porta Inicial Configurada: {smtp_port_str}")
     logging.info(f"👤 Utilizador SMTP: '{smtp_username}'")
     logging.info(f"📤 De (From): '{email_from}'")
@@ -55,78 +70,107 @@ def test_plano_a_smtp() -> bool:
         logging.error("❌ FALHA PLANO A: Variável 'ALERT_EMAIL_TO' não está definida!")
         return False
     if not smtp_username or not smtp_password:
-        logging.warning("⚠️ SMTP_USERNAME ou SMTP_PASSWORD vazios. Tentando envio sem autenticação...")
+        logging.warning("⚠️ SMTP_USERNAME ou SMTP_PASSWORD vazios.")
+
+    # Lista de servidores a testar (o configurado + fallback oficial da Hostinger 'smtp.hostinger.com')
+    servers_to_test = [smtp_server]
+    if smtp_server.lower() != "smtp.hostinger.com":
+        servers_to_test.append("smtp.hostinger.com")
 
     # Montar mensagem MIME
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    subject = "Hello World - Teste de Email (Plano A: SMTP Nuelltech)"
-    body = (
-        "Hello World!\n\n"
-        "Este é um email de teste enviado pelo script de diagnóstico do Trading Agent.\n\n"
-        f"• Canal: Plano A (SMTP Directo)\n"
-        f"• Servidor: {smtp_server}\n"
-        f"• Remetente: {email_from}\n"
-        f"• Destinatário: {email_to}\n"
-        f"• Data/Hora: {timestamp}\n\n"
-        "Se recebeste esta mensagem, a funcionalidade de email SMTP está OPERACIONAL! 🚀"
-    )
+    subject = "Hello World - Teste de Email (Plano A: SMTP)"
 
-    msg = MIMEMultipart()
-    msg["From"] = email_from
-    msg["To"] = email_to
-    msg["Subject"] = f"🚨 {subject}"
-    msg.attach(MIMEText(body, "plain", "utf-8"))
-
-    # Definir portas a testar (465 SSL preferencial recomendado pela Hostinger, fallback 587 STARTTLS)
-    try:
-        main_port = int(smtp_port_str)
-    except ValueError:
-        main_port = 465
-
-    ports_to_try = [main_port]
-    if main_port == 465 and 587 not in ports_to_try:
-        ports_to_try.append(587)
-    elif main_port == 587 and 465 not in ports_to_try:
-        ports_to_try.append(465)
-
-    for port in ports_to_try:
-        logging.info(f"\n🔄 Tentando conexão SMTP na porta {port}...")
+    for server_host in servers_to_test:
+        logging.info(f"\n🌐 DIAGNÓSTICO E TESTE PARA O SERVIDOR: '{server_host}'")
+        
+        # Testar resolução DNS
         try:
-            if port == 465:
-                logging.info(f"🔒 Conectando via SMTP_SSL a {smtp_server}:{port} (timeout=10s)...")
-                with smtplib.SMTP_SSL(smtp_server, port, timeout=10) as server:
-                    server.set_debuglevel(1) if os.getenv("DEBUG_SMTP") else None
-                    if smtp_username and smtp_password:
-                        logging.info("🔐 Efetuando autenticação login SMTP...")
-                        server.login(smtp_username, smtp_password)
-                    logging.info("📤 Enviando mensagem...")
-                    server.send_message(msg)
-            else:
-                logging.info(f"🔓 Conectando via SMTP standard com STARTTLS a {smtp_server}:{port} (timeout=10s)...")
-                with smtplib.SMTP(smtp_server, port, timeout=10) as server:
-                    server.set_debuglevel(1) if os.getenv("DEBUG_SMTP") else None
-                    server.ehlo()
-                    logging.info("🛡️ Iniciando STARTTLS...")
-                    server.starttls()
-                    server.ehlo()
-                    if smtp_username and smtp_password:
-                        logging.info("🔐 Efetuando autenticação login SMTP...")
-                        server.login(smtp_username, smtp_password)
-                    logging.info("📤 Enviando mensagem...")
-                    server.send_message(msg)
+            resolved_ip = socket.gethostbyname(server_host)
+            logging.info(f"🔍 DNS OK: '{server_host}' resolveu para o IP {resolved_ip}")
+        except Exception as dns_err:
+            logging.error(f"❌ DNS FALHOU: Não foi possível resolver '{server_host}': {dns_err}")
+            continue
 
-            logging.info(f"✅ SUCESSO PLANO A: Email enviado com sucesso via SMTP (Porta {port})!")
-            return True
+        try:
+            main_port = int(smtp_port_str)
+        except ValueError:
+            main_port = 465
 
-        except smtplib.SMTPAuthenticationError as auth_err:
-            logging.error(f"❌ Erro de Autenticação na porta {port}: {auth_err}")
-            logging.error("👉 Verifique se SMTP_USERNAME e SMTP_PASSWORD estão corretos no cPanel/Hostinger.")
-        except smtplib.SMTPConnectError as conn_err:
-            logging.error(f"❌ Erro de Conexão na porta {port}: {conn_err}")
-        except Exception as err:
-            logging.error(f"❌ Erro ao enviar na porta {port}: {type(err).__name__} - {err}")
+        ports_to_try = [main_port]
+        for p in [465, 587, 2525]:
+            if p not in ports_to_try:
+                ports_to_try.append(p)
 
-    logging.error("❌ FALHA PLANO A: Nenhuma porta SMTP (465/587) conseguiu concluir o envio.")
+        for port in ports_to_try:
+            logging.info(f"\n🔄 [Servidor: {server_host}] Testando porta {port}...")
+            
+            # 1. Teste de Conectividade Socket
+            sock_ok, sock_msg = test_socket_connectivity(server_host, port, timeout=12.0)
+            logging.info(f"  └─ Diagnostic Socket: {sock_msg}")
+            
+            if not sock_ok:
+                logging.warning(f"  ⚠️ Ignorando protocolo SMTP na porta {port} devido a falha de conexão TCP.")
+                continue
+
+            # 2. Tentar Envio SMTP
+            msg = MIMEMultipart()
+            msg["From"] = email_from
+            msg["To"] = email_to
+            msg["Subject"] = f"🚨 {subject}"
+            body = (
+                "Hello World!\n\n"
+                "Este é um email de teste enviado pelo script de diagnóstico do Trading Agent.\n\n"
+                f"• Canal: Plano A (SMTP Directo)\n"
+                f"• Servidor Usado: {server_host} (Porta {port})\n"
+                f"• Remetente: {email_from}\n"
+                f"• Destinatário: {email_to}\n"
+                f"• Data/Hora: {timestamp}\n\n"
+                "Se recebeste esta mensagem, a funcionalidade de email SMTP está OPERACIONAL! 🚀"
+            )
+            msg.attach(MIMEText(body, "plain", "utf-8"))
+
+            try:
+                if port == 465:
+                    logging.info(f"  🔒 Conectando via smtplib.SMTP_SSL({server_host}, {port}, timeout=15)...")
+                    context = ssl.create_default_context()
+                    with smtplib.SMTP_SSL(server_host, port, context=context, timeout=15) as server:
+                        if os.getenv("DEBUG_SMTP"):
+                            server.set_debuglevel(1)
+                        if smtp_username and smtp_password:
+                            logging.info("  🔐 Efetuando login SMTP...")
+                            server.login(smtp_username, smtp_password)
+                        logging.info("  📤 Enviando mensagem...")
+                        server.send_message(msg)
+                else:
+                    logging.info(f"  🔓 Conectando via smtplib.SMTP({server_host}, {port}, timeout=15)...")
+                    with smtplib.SMTP(server_host, port, timeout=15) as server:
+                        if os.getenv("DEBUG_SMTP"):
+                            server.set_debuglevel(1)
+                        server.ehlo()
+                        logging.info("  🛡️ Executando STARTTLS...")
+                        context = ssl.create_default_context()
+                        server.starttls(context=context)
+                        server.ehlo()
+                        if smtp_username and smtp_password:
+                            logging.info("  🔐 Efetuando login SMTP...")
+                            server.login(smtp_username, smtp_password)
+                        logging.info("  📤 Enviando mensagem...")
+                        server.send_message(msg)
+
+                logging.info(f"\n🎉 ✅ SUCESSO PLANO A: Email enviado com sucesso via SMTP ({server_host}:{port})!")
+                if server_host != smtp_server:
+                    logging.info(f"💡 DICA: Recomenda-se atualizar a variável 'SMTP_SERVER' no GitHub Secrets para '{server_host}'.")
+                return True
+
+            except smtplib.SMTPAuthenticationError as auth_err:
+                logging.error(f"  ❌ Erro de Autenticação em {server_host}:{port} -> {auth_err}")
+                logging.error("  👉 Verifique se SMTP_USERNAME e SMTP_PASSWORD coincidem com a conta de email no cPanel/Hostinger.")
+                logging.error("  👉 Certifique-se também de que o remetente (ALERT_EMAIL_FROM) pertence ao mesmo domínio da conta.")
+            except Exception as err:
+                logging.error(f"  ❌ Erro no envio SMTP em {server_host}:{port} -> {type(err).__name__}: {err}")
+
+    logging.error("\n❌ FALHA PLANO A: Nenhum servidor/porta SMTP conseguiu conectar ou concluir o envio.")
     return False
 
 
@@ -208,7 +252,7 @@ def main():
     results = {}
 
     if args.plan in ["A", "ALL"]:
-        results["Plano A (SMTP Nuelltech)"] = test_plano_a_smtp()
+        results["Plano A (SMTP Nuelltech / Hostinger)"] = test_plano_a_smtp()
 
     if args.plan in ["B", "ALL"]:
         results["Plano B (Resend API)"] = test_plano_b_resend()
@@ -221,7 +265,6 @@ def main():
         logging.info(f"• {plan}: {status_icon}")
     logging.info("=" * 60)
 
-    # Retorna código de erro 0 se pelo menos um funcionou, ou 1 se todos falharam
     if any(results.values()):
         sys.exit(0)
     else:
