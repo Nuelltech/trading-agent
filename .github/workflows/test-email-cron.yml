@@ -29,7 +29,8 @@ jobs:
         env:
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM || secrets.SMTP_USERNAME }}
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+          SMTP_SERVER_HOSTINGER: ${{ secrets.SMTP_SERVER_HOSTINGER }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER_HOSTINGER || secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT || '465' }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}

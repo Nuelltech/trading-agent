@@ -50,7 +50,7 @@ def test_plano_a_smtp() -> bool:
     logging.info("📧 PLANO A: Testando Envio de Email via SMTP (Servidor Nuelltech / Hostinger)")
     logging.info("=" * 60)
 
-    smtp_server = os.getenv("SMTP_SERVER", "").strip()
+    smtp_server = os.getenv("SMTP_SERVER_HOSTINGER", "").strip() or os.getenv("SMTP_SERVER", "").strip()
     smtp_port_str = os.getenv("SMTP_PORT", "465").strip()
     smtp_username = os.getenv("SMTP_USERNAME", "").strip()
     smtp_password = os.getenv("SMTP_PASSWORD", "").strip()
