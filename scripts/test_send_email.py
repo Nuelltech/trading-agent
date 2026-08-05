@@ -72,10 +72,11 @@ def test_plano_a_smtp() -> bool:
     if not smtp_username or not smtp_password:
         logging.warning("⚠️ SMTP_USERNAME ou SMTP_PASSWORD vazios.")
 
-    # Lista de servidores a testar (o configurado + fallback oficial da Hostinger 'smtp.hostinger.com')
+    # Lista de servidores a testar (o configurado + servidor cPanel especifico + fallback Hostinger)
     servers_to_test = [smtp_server]
-    if smtp_server.lower() != "smtp.hostinger.com":
-        servers_to_test.append("smtp.hostinger.com")
+    for fallback_host in ["cpl109.main-hosting.eu", "smtp.hostinger.com"]:
+        if fallback_host not in [s.lower() for s in servers_to_test]:
+            servers_to_test.append(fallback_host)
 
     # Montar mensagem MIME
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
