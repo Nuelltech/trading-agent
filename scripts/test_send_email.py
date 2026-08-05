@@ -230,6 +230,30 @@ def test_plano_b_resend() -> bool:
         if response.status_code in [200, 201]:
             logging.info("✅ SUCESSO PLANO B: Email enviado com sucesso via Resend API!")
             return True
+        elif response.status_code == 403 and "not verified" in response.text:
+            logging.warning("⚠️ Remetente customizado não verificado no Resend. Tentando fallback automático com 'onboarding@resend.dev'...")
+            fallback_resp = requests.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {resend_api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "from": "onboarding@resend.dev",
+                    "to": [email_to],
+                    "subject": f"🚨 {subject} (Fallback Resend)",
+                    "text": body
+                },
+                timeout=10
+            )
+            logging.info(f"Fallback Resend Status Code: {fallback_resp.status_code}")
+            logging.info(f"Fallback Resend Resposta: {fallback_resp.text}")
+            if fallback_resp.status_code in [200, 201]:
+                logging.info("✅ SUCESSO PLANO B: Email enviado via Resend (Remetente: onboarding@resend.dev)!")
+                return True
+            else:
+                logging.error(f"❌ FALHA PLANO B: Fallback Resend recusado (HTTP {fallback_resp.status_code}).")
+                return False
         else:
             logging.error(f"❌ FALHA PLANO B: Resend API retornou erro HTTP {response.status_code}.")
             return False

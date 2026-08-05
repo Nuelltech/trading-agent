@@ -92,6 +92,19 @@ def send_email_alert(subject: str, message: str) -> bool:
                 if resp.status_code in [200, 201]:
                     logging.info(f"✅ Alerta enviado com sucesso via Resend HTTPS API para {ALERT_EMAIL_TO}.")
                     return True
+                elif resp.status_code == 403 and "not verified" in resp.text:
+                    logging.warning("⚠️ Remetente customizado não verificado no Resend. Tentando fallback automático com 'onboarding@resend.dev'...")
+                    fb_resp = requests.post(
+                        "https://api.resend.com/emails",
+                        headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+                        json={"from": "onboarding@resend.dev", "to": [ALERT_EMAIL_TO], "subject": f"🚨 Trading Agent: {subject}", "text": message},
+                        timeout=5
+                    )
+                    if fb_resp.status_code in [200, 201]:
+                        logging.info(f"✅ Alerta enviado com sucesso via Resend (Remetente: onboarding@resend.dev) para {ALERT_EMAIL_TO}.")
+                        return True
+                    else:
+                        logging.warning(f"⚠️ Resend Fallback recusou (HTTP {fb_resp.status_code}): {fb_resp.text}")
                 else:
                     logging.warning(f"⚠️ Resend HTTPS API recusou (HTTP {resp.status_code}): {resp.text}")
             except Exception as r_err:
