@@ -78,9 +78,20 @@ def test_plano_a_smtp() -> bool:
         if fallback_host not in [s.lower() for s in servers_to_test]:
             servers_to_test.append(fallback_host)
 
-    # Montar mensagem MIME
+    # Montar mensagem MIME profissional (sem emojis no assunto para evitar filtros de spam de saída do Exim)
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    subject = "Hello World - Teste de Email (Plano A: SMTP)"
+    subject = "Trading Agent System Notification: Email Connectivity Verification"
+    body = (
+        "Trading Agent System Status Report\n"
+        "----------------------------------------\n\n"
+        "This is an automated system notification to verify email dispatch connectivity.\n\n"
+        f"• Service Channel: Plan A (Direct SMTP)\n"
+        f"• Server Host: {smtp_server}\n"
+        f"• Sender Address: {email_from}\n"
+        f"• Recipient Address: {email_to}\n"
+        f"• Timestamp: {timestamp}\n\n"
+        "If you are receiving this email, the SMTP alert notification service is fully operational."
+    )
 
     for server_host in servers_to_test:
         logging.info(f"\n🌐 DIAGNÓSTICO E TESTE PARA O SERVIDOR: '{server_host}'")
@@ -118,18 +129,9 @@ def test_plano_a_smtp() -> bool:
             msg = MIMEMultipart()
             msg["From"] = email_from
             msg["To"] = email_to
-            msg["Subject"] = f"🚨 {subject}"
-            body = (
-                "Hello World!\n\n"
-                "Este é um email de teste enviado pelo script de diagnóstico do Trading Agent.\n\n"
-                f"• Canal: Plano A (SMTP Directo)\n"
-                f"• Servidor Usado: {server_host} (Porta {port})\n"
-                f"• Remetente: {email_from}\n"
-                f"• Destinatário: {email_to}\n"
-                f"• Data/Hora: {timestamp}\n\n"
-                "Se recebeste esta mensagem, a funcionalidade de email SMTP está OPERACIONAL! 🚀"
-            )
+            msg["Subject"] = subject
             msg.attach(MIMEText(body, "plain", "utf-8"))
+
 
             try:
                 if port == 465:
