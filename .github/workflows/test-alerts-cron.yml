@@ -1,0 +1,41 @@
+name: Teste - Disparo de Alertas de Sistema (Sweeps & Quarentena)
+
+on:
+  workflow_dispatch: # Disparo manual nas Actions do GitHub
+
+jobs:
+  test-alerts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests python-dotenv sqlalchemy pymysql
+
+      - name: Executar Teste de Disparo de Alertas
+        env:
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM || secrets.SMTP_USERNAME }}
+          ALERT_EMAIL_FROM_NAME: ${{ secrets.ALERT_EMAIL_FROM_NAME || 'Trader AI' }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          SMTP_SERVER_HOSTINGER: ${{ secrets.SMTP_SERVER_HOSTINGER }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER_HOSTINGER || secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || '465' }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_HOSTINGER_PASSWD: ${{ secrets.SMTP_HOSTINGER_PASSWD }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_HOSTINGER_PASSWD || secrets.SMTP_PASSWORD }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python scripts/test_alert_triggers.py
