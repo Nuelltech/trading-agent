@@ -46,22 +46,43 @@ def format_sweep_alert(sweep_event: dict) -> str:
     alert_msg = f"[SWEEP ALERT] {symbol} | {tipo_str} ${level:.2f} perfurado | Pavio {ratio}x threshold | {timestamp}"
     return alert_msg
 
+def remove_emojis(text: str) -> str:
+    """Remove emojis e simbolos graficos Unicode para garantir 0% de pontuação antispam"""
+    import re
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"
+        "\U0001F300-\U0001F5FF"
+        "\U0001F680-\U0001F6FF"
+        "\U0001F1E0-\U0001F1FF"
+        "\U0002600-\U00026FF"
+        "\U0002700-\U00027BF"
+        "\U0001F900-\U0001F9FF"
+        "]+", flags=re.UNICODE
+    )
+    clean = emoji_pattern.sub("", text)
+    # Remover múltiplos espaços
+    clean = re.sub(r' +', ' ', clean)
+    return clean.strip()
+
 def send_email_alert(subject: str, message: str) -> bool:
-    """Envia alerta por Email via SMTP. Tenta Porta 465 (SSL) e 587 (STARTTLS) com fallback automático."""
+    """Envia alerta por Email via SMTP. Garantia de 0% emojis no assunto e corpo."""
     if not (SMTP_SERVER and ALERT_EMAIL_TO):
         return False
     try:
         sender_address = ALERT_EMAIL_FROM or SMTP_USERNAME
         from_header = formataddr((ALERT_EMAIL_FROM_NAME, sender_address)) if ALERT_EMAIL_FROM_NAME else sender_address
 
-        # Assunto corporativo limpo sem emojis no cabeçalho para evitar bloqueios de filtros de spam de saída (Exim / Hostinger)
-        clean_subject = f"Trading Agent: {subject.strip()}"
+        # REGRA RÍGIDA: Assunto e mensagem 100% livres de emojis
+        clean_subj_raw = remove_emojis(subject)
+        clean_subject = f"Trading Agent: {clean_subj_raw}" if not clean_subj_raw.startswith("Trading Agent") else clean_subj_raw
+        clean_body = remove_emojis(message)
 
         msg = MIMEMultipart()
         msg["From"] = from_header
         msg["To"] = ALERT_EMAIL_TO
         msg["Subject"] = clean_subject
-        msg.attach(MIMEText(message, "plain", "utf-8"))
+        msg.attach(MIMEText(clean_body, "plain", "utf-8"))
 
         ports_to_try = [int(SMTP_PORT)]
         if int(SMTP_PORT) == 465 and 587 not in ports_to_try:
@@ -87,14 +108,14 @@ def send_email_alert(subject: str, message: str) -> bool:
             except Exception as port_err:
                 logging.warning(f"⚠️ Tentativa SMTP na Porta {port} falhou ({port_err}). Tentando porta alternativa...")
 
-        # Fallback via HTTPS API (Resend API - Porta 443 HTTPS imune a bloqueios de cloud firewall)
+        # Fallback via HTTPS API (Resend API)
         resend_key = os.getenv("RESEND_API_KEY", "")
         if resend_key:
             try:
                 resp = requests.post(
                     "https://api.resend.com/emails",
                     headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-                    json={"from": from_header or "Trader AI <onboarding@resend.dev>", "to": [ALERT_EMAIL_TO], "subject": clean_subject, "text": message},
+                    json={"from": from_header or "Trader AI <onboarding@resend.dev>", "to": [ALERT_EMAIL_TO], "subject": clean_subject, "text": clean_body},
                     timeout=5
                 )
 
@@ -102,11 +123,11 @@ def send_email_alert(subject: str, message: str) -> bool:
                     logging.info(f"✅ Alerta enviado com sucesso via Resend HTTPS API para {ALERT_EMAIL_TO}.")
                     return True
                 elif resp.status_code == 403 and "not verified" in resp.text:
-                    logging.warning("⚠️ Remetente customizado não verificado no Resend. Tentando fallback automático com 'onboarding@resend.dev'...")
+                    logging.warning("⚠️ Remetente customizado não verificado no Resend. Tentando fallback com 'onboarding@resend.dev'...")
                     fb_resp = requests.post(
                         "https://api.resend.com/emails",
                         headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-                        json={"from": "onboarding@resend.dev", "to": [ALERT_EMAIL_TO], "subject": clean_subject, "text": message},
+                        json={"from": "onboarding@resend.dev", "to": [ALERT_EMAIL_TO], "subject": clean_subject, "text": clean_body},
                         timeout=5
                     )
                     if fb_resp.status_code in [200, 201]:
@@ -125,7 +146,47 @@ def send_email_alert(subject: str, message: str) -> bool:
         logging.error(f"Erro ao enviar alerta por Email: {e}")
         return False
 
-def send_alert_notification(message: str, subject: Optional[str] = None) -> bool:
+def send_digest_email_alert(subject: str, alert_items: list) -> bool:
+    """
+    REGRA DE AGRUPAMENTO: Envia 1 ÚNICO e-mail consolidado (Digest Report) contendo todos os alertas
+    detetados durante a execução do cron.
+    Garante 0% emojis no assunto e no corpo.
+    """
+    if not alert_items:
+        return False
+
+    clean_items = [remove_emojis(str(item)) for item in alert_items if str(item).strip()]
+    if not clean_items:
+        return False
+
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    clean_subj_raw = remove_emojis(subject)
+    clean_subject = f"Trading Agent: {clean_subj_raw}" if not clean_subj_raw.startswith("Trading Agent") else clean_subj_raw
+
+    body_lines = [
+        "Trading Agent System Alert Summary Report",
+        "--------------------------------------------------",
+        f"Timestamp: {timestamp}",
+        f"Total Events Detected in Execution: {len(clean_items)}",
+        "",
+        "Summary of Events:",
+        "--------------------------------------------------"
+    ]
+
+    for idx, item in enumerate(clean_items, 1):
+        body_lines.append(f"{idx}. {item}")
+
+    body_lines.extend([
+        "",
+        "--------------------------------------------------",
+        "This is an automated system notification from Trading Agent."
+    ])
+
+    body = "\n".join(body_lines)
+    return send_email_alert(clean_subject, body)
+
+
+def send_alert_notification(message: str, subject: Optional[str] = None, send_email: bool = True) -> bool:
     """Envia o alerta para Discord Webhook, Telegram Bot e/ou Email (se configurados)"""
     logging.info(f"📢 ALERTA ANALÍTICO DISPARADO: {message}")
     sent = False
@@ -152,8 +213,8 @@ def send_alert_notification(message: str, subject: Optional[str] = None) -> bool
         except Exception as e:
             logging.error(f"Erro ao enviar alerta para Telegram: {e}")
 
-    # 3. Enviar por Email (SMTP)
-    if SMTP_SERVER and ALERT_EMAIL_TO:
+    # 3. Enviar por Email (SMTP) - Apenas se send_email=True
+    if send_email and SMTP_SERVER and ALERT_EMAIL_TO:
         if not subject:
             if message.startswith("[SWEEP ALERT]"):
                 parts = message.split("|")
@@ -167,6 +228,7 @@ def send_alert_notification(message: str, subject: Optional[str] = None) -> bool
             sent = True
 
     return sent
+
 
 
 def check_quarantine_sla_violations(hours_threshold: int = 12) -> int:

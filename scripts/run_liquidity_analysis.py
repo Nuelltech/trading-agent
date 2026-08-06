@@ -16,7 +16,12 @@ from app.database import engine
 from sqlalchemy import text
 from app.services.liquidity_engine import analyze_liquidity_sweeps
 from app.services.vpvr_ondemand import calculate_vpvr
-from app.services.alert_service import format_sweep_alert, send_alert_notification, check_quarantine_sla_violations
+from app.services.alert_service import (
+    format_sweep_alert,
+    send_alert_notification,
+    send_digest_email_alert,
+    check_quarantine_sla_violations
+)
 from app.services.notion_sync_service import publish_liquidity_signal_to_notion
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -29,6 +34,7 @@ WATCHLIST_ANALYSIS = [
 def run_liquidity_analysis_pipeline():
     logging.info("🎯 Executando Módulo de Análise de Liquidez e Sweeps (Produção Validada)...")
     alerts_triggered = 0
+    recent_email_alerts = []
 
     for symbol in WATCHLIST_ANALYSIS:
         try:
@@ -74,7 +80,10 @@ def run_liquidity_analysis_pipeline():
                     
                     if is_recent:
                         alert_msg = format_sweep_alert(sweep)
-                        send_alert_notification(alert_msg)
+                        recent_email_alerts.append(alert_msg)
+                        
+                        # Notificar Discord/Telegram sem disparar emails individuais múltiplos
+                        send_alert_notification(alert_msg, send_email=False)
                         alerts_triggered += 1
                     else:
                         logging.info(f"ℹ️ [HISTÓRICO SIMULADO] Sweep antigo de {sweep.get('timestamp')} para {symbol} ignorado para alertas de e-mail.")
@@ -88,16 +97,23 @@ def run_liquidity_analysis_pipeline():
                         if vpvr_res:
                             logging.info(f"📊 VPVR On-Demand [{symbol}]: POC=${vpvr_res['poc_price']} | HVNs={vpvr_res['hvn_nodes'][:3]}")
 
-
         except Exception as e:
             logging.error(f"Erro ao analisar liquidez para {symbol}: {e}")
 
     # 3. Monitor de SLA de Quarentena (Alerta de dados em falta > 12h)
     sla_violations = check_quarantine_sla_violations(hours_threshold=12)
+
+    # 4. REGRA DE AGRUPAMENTO: Disparar EXATAMENTE 1 E-MAIL CONSOLIDADO ao final da execução se houverem alertas
+    if recent_email_alerts:
+        digest_title = f"Liquidity & Market Alert Report ({len(recent_email_alerts)} Events)"
+        logging.info(f"📤 Enviando 1 ÚNICO e-mail de resumo consolidado com {len(recent_email_alerts)} eventos...")
+        send_digest_email_alert(digest_title, recent_email_alerts)
+
     if sla_violations >= 0:
-        logging.info(f"🎉 Pipeline de Liquidez Concluído: {alerts_triggered} Alertas Analíticos Disparados | {sla_violations} Violações SLA Quarentena.")
+        logging.info(f"🎉 Pipeline de Liquidez Concluído: {alerts_triggered} Alertas Analíticos Encontrados | {sla_violations} Violações SLA Quarentena.")
     else:
-        logging.warning(f"⚠️ Pipeline de Liquidez Concluído: {alerts_triggered} Alertas Analíticos Disparados | SLA Quarentena NÃO VERIFICADO (Erro DB).")
+        logging.warning(f"⚠️ Pipeline de Liquidez Concluído: {alerts_triggered} Alertas Analíticos Encontrados | SLA Quarentena NÃO VERIFICADO (Erro DB).")
+
 
 
 
