@@ -28,6 +28,7 @@ jobs:
       - name: Executar Teste de Envio de Email (Hello World)
         env:
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM || secrets.SMTP_USERNAME }}
+          ALERT_EMAIL_FROM_NAME: ${{ secrets.ALERT_EMAIL_FROM_NAME || 'Trader AI' }}
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
           SMTP_SERVER_HOSTINGER: ${{ secrets.SMTP_SERVER_HOSTINGER }}
           SMTP_SERVER: ${{ secrets.SMTP_SERVER_HOSTINGER || secrets.SMTP_SERVER }}

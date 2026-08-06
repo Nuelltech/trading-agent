@@ -15,6 +15,7 @@ import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formataddr
 from datetime import datetime
 import requests
 
@@ -56,6 +57,8 @@ def test_plano_a_smtp() -> bool:
     smtp_password = os.getenv("SMTP_HOSTINGER_PASSWD", "").strip() or os.getenv("SMTP_PASSWORD", "").strip()
     email_to = os.getenv("ALERT_EMAIL_TO", "").strip()
     email_from = os.getenv("ALERT_EMAIL_FROM", smtp_username).strip()
+    email_from_name = os.getenv("ALERT_EMAIL_FROM_NAME", "Trader AI").strip()
+    from_header = formataddr((email_from_name, email_from)) if email_from_name else email_from
 
     logging.info(f"📍 Servidor SMTP Configurado: '{smtp_server}'")
     logging.info(f"🔌 Porta Inicial Configurada: {smtp_port_str}")
@@ -127,7 +130,7 @@ def test_plano_a_smtp() -> bool:
 
             # 2. Tentar Envio SMTP
             msg = MIMEMultipart()
-            msg["From"] = email_from
+            msg["From"] = from_header
             msg["To"] = email_to
             msg["Subject"] = subject
             msg.attach(MIMEText(body, "plain", "utf-8"))
@@ -212,6 +215,7 @@ def test_plano_b_resend() -> bool:
 
     try:
         logging.info("🌐 Fazendo requisição HTTP POST para https://api.resend.com/emails ...")
+        from_header_resend = f"{email_from_name} <{email_from}>" if email_from_name else email_from
         response = requests.post(
             "https://api.resend.com/emails",
             headers={
@@ -219,13 +223,14 @@ def test_plano_b_resend() -> bool:
                 "Content-Type": "application/json"
             },
             json={
-                "from": email_from,
+                "from": from_header_resend,
                 "to": [email_to],
                 "subject": f"🚨 {subject}",
                 "text": body
             },
             timeout=10
         )
+
 
         logging.info(f"HTTP Status Code: {response.status_code}")
         logging.info(f"HTTP Resposta: {response.text}")

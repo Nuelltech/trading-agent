@@ -19,6 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formataddr
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -30,6 +31,7 @@ SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
 SMTP_PASSWORD = os.getenv("SMTP_HOSTINGER_PASSWD", "").strip() or os.getenv("SMTP_PASSWORD", "").strip()
 ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO", "")
 ALERT_EMAIL_FROM = os.getenv("ALERT_EMAIL_FROM", SMTP_USERNAME or "alerts@tradingagent.local")
+ALERT_EMAIL_FROM_NAME = os.getenv("ALERT_EMAIL_FROM_NAME", "Trader AI").strip()
 
 def format_sweep_alert(sweep_event: dict) -> str:
     """Formata o alerta de sweep de acordo com a norma da Secção 6.1"""
@@ -49,8 +51,11 @@ def send_email_alert(subject: str, message: str) -> bool:
     if not (SMTP_SERVER and ALERT_EMAIL_TO):
         return False
     try:
+        sender_address = ALERT_EMAIL_FROM or SMTP_USERNAME
+        from_header = formataddr((ALERT_EMAIL_FROM_NAME, sender_address)) if ALERT_EMAIL_FROM_NAME else sender_address
+
         msg = MIMEMultipart()
-        msg["From"] = ALERT_EMAIL_FROM or SMTP_USERNAME
+        msg["From"] = from_header
         msg["To"] = ALERT_EMAIL_TO
         msg["Subject"] = f"🚨 Trading Agent: {subject}"
         msg.attach(MIMEText(message, "plain", "utf-8"))
@@ -86,9 +91,10 @@ def send_email_alert(subject: str, message: str) -> bool:
                 resp = requests.post(
                     "https://api.resend.com/emails",
                     headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-                    json={"from": ALERT_EMAIL_FROM or "onboarding@resend.dev", "to": [ALERT_EMAIL_TO], "subject": f"🚨 Trading Agent: {subject}", "text": message},
+                    json={"from": from_header or "Trader AI <onboarding@resend.dev>", "to": [ALERT_EMAIL_TO], "subject": f"🚨 Trading Agent: {subject}", "text": message},
                     timeout=5
                 )
+
                 if resp.status_code in [200, 201]:
                     logging.info(f"✅ Alerta enviado com sucesso via Resend HTTPS API para {ALERT_EMAIL_TO}.")
                     return True
