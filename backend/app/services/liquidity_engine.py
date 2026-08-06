@@ -166,6 +166,7 @@ def analyze_liquidity_sweeps(symbol: str, df: pd.DataFrame, k_factor: float = 1.
                     "atr14": round(atr14_val, 4),
                     "atr60_capped": round(atr60_capped_val, 4),
                     "is_forex": is_forex,
+                    "sweep_index": i,
                     "status": "LIQUIDEZ_CONSUMIDA",
                     "status_atr60": "COMPLETO",
                     "sweep_detected": True,
@@ -190,10 +191,12 @@ def analyze_liquidity_sweeps(symbol: str, df: pd.DataFrame, k_factor: float = 1.
                     "atr14": round(atr14_val, 4),
                     "atr60_capped": round(atr60_capped_val, 4),
                     "is_forex": is_forex,
+                    "sweep_index": i,
                     "status": "LIQUIDEZ_CONSUMIDA",
                     "status_atr60": "COMPLETO",
                     "sweep_detected": True,
                     "details": f"Sweep de Fundo: Suporte {prev_low:.4f} perfurado com pavio {lower_wick:.4f} (>= {thresh:.4f})"
                 })
+
                 
     return sweeps_detected

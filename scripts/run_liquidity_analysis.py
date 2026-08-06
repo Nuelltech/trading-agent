@@ -68,19 +68,26 @@ def run_liquidity_analysis_pipeline():
             
             for sweep in sweeps:
                 if sweep.get("status") == "LIQUIDEZ_CONSUMIDA":
-                    alert_msg = format_sweep_alert(sweep)
-                    send_alert_notification(alert_msg)
+                    # Disparar alerta por e-mail apenas se o sweep ocorreu nas últimas 3 sessões (evita re-enviar sweeps antigos de meses atrás)
+                    sweep_idx = sweep.get("sweep_index", len(df) - 1)
+                    is_recent = sweep_idx >= (len(df) - 3)
                     
-                    # Publicar no Notion (Database 'Sinais de Liquidez')
+                    if is_recent:
+                        alert_msg = format_sweep_alert(sweep)
+                        send_alert_notification(alert_msg)
+                        alerts_triggered += 1
+                    else:
+                        logging.info(f"ℹ️ [HISTÓRICO SIMULADO] Sweep antigo de {sweep.get('timestamp')} para {symbol} ignorado para alertas de e-mail.")
+                    
+                    # Publicar no Notion (Database 'Sinais de Liquidez' - possui desduplicação própria)
                     publish_liquidity_signal_to_notion(sweep)
-                    
-                    alerts_triggered += 1
                     
                     # 2. Se o ativo tiver volume real (não Forex), calcular VPVR On-Demand
                     if not sweep.get("is_forex", False):
                         vpvr_res = calculate_vpvr(symbol, df)
                         if vpvr_res:
                             logging.info(f"📊 VPVR On-Demand [{symbol}]: POC=${vpvr_res['poc_price']} | HVNs={vpvr_res['hvn_nodes'][:3]}")
+
 
         except Exception as e:
             logging.error(f"Erro ao analisar liquidez para {symbol}: {e}")
