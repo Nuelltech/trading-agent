@@ -54,10 +54,13 @@ def send_email_alert(subject: str, message: str) -> bool:
         sender_address = ALERT_EMAIL_FROM or SMTP_USERNAME
         from_header = formataddr((ALERT_EMAIL_FROM_NAME, sender_address)) if ALERT_EMAIL_FROM_NAME else sender_address
 
+        # Assunto corporativo limpo sem emojis no cabeçalho para evitar bloqueios de filtros de spam de saída (Exim / Hostinger)
+        clean_subject = f"Trading Agent: {subject.strip()}"
+
         msg = MIMEMultipart()
         msg["From"] = from_header
         msg["To"] = ALERT_EMAIL_TO
-        msg["Subject"] = f"🚨 Trading Agent: {subject}"
+        msg["Subject"] = clean_subject
         msg.attach(MIMEText(message, "plain", "utf-8"))
 
         ports_to_try = [int(SMTP_PORT)]
@@ -91,7 +94,7 @@ def send_email_alert(subject: str, message: str) -> bool:
                 resp = requests.post(
                     "https://api.resend.com/emails",
                     headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-                    json={"from": from_header or "Trader AI <onboarding@resend.dev>", "to": [ALERT_EMAIL_TO], "subject": f"🚨 Trading Agent: {subject}", "text": message},
+                    json={"from": from_header or "Trader AI <onboarding@resend.dev>", "to": [ALERT_EMAIL_TO], "subject": clean_subject, "text": message},
                     timeout=5
                 )
 
@@ -103,7 +106,7 @@ def send_email_alert(subject: str, message: str) -> bool:
                     fb_resp = requests.post(
                         "https://api.resend.com/emails",
                         headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-                        json={"from": "onboarding@resend.dev", "to": [ALERT_EMAIL_TO], "subject": f"🚨 Trading Agent: {subject}", "text": message},
+                        json={"from": "onboarding@resend.dev", "to": [ALERT_EMAIL_TO], "subject": clean_subject, "text": message},
                         timeout=5
                     )
                     if fb_resp.status_code in [200, 201]:
@@ -116,14 +119,13 @@ def send_email_alert(subject: str, message: str) -> bool:
             except Exception as r_err:
                 logging.warning(f"⚠️ Resend HTTPS API falhou: {r_err}")
 
-
         logging.error("❌ Erro permanente ao enviar alerta por Email em todas as portas SMTP (465 e 587) e HTTPS API.")
         return False
     except Exception as e:
         logging.error(f"Erro ao enviar alerta por Email: {e}")
         return False
 
-def send_alert_notification(message: str) -> bool:
+def send_alert_notification(message: str, subject: Optional[str] = None) -> bool:
     """Envia o alerta para Discord Webhook, Telegram Bot e/ou Email (se configurados)"""
     logging.info(f"📢 ALERTA ANALÍTICO DISPARADO: {message}")
     sent = False
@@ -152,10 +154,20 @@ def send_alert_notification(message: str) -> bool:
 
     # 3. Enviar por Email (SMTP)
     if SMTP_SERVER and ALERT_EMAIL_TO:
-        if send_email_alert("Alerta Analítico de Mercado", message):
+        if not subject:
+            if message.startswith("[SWEEP ALERT]"):
+                parts = message.split("|")
+                subject = f"Sweep Event {parts[0].replace('[SWEEP ALERT]', '').strip()}"
+            elif "QUARENTENA" in message:
+                subject = "Data Quarantine Alert"
+            else:
+                subject = "System Notification"
+
+        if send_email_alert(subject, message):
             sent = True
 
     return sent
+
 
 def check_quarantine_sla_violations(hours_threshold: int = 12) -> int:
     """
