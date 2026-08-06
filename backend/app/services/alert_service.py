@@ -47,7 +47,7 @@ def format_sweep_alert(sweep_event: dict) -> str:
     return alert_msg
 
 def remove_emojis(text: str) -> str:
-    """Remove emojis e simbolos graficos Unicode para garantir 0% de pontuação antispam"""
+    """Remove emojis, simbolos graficos e seletores de variacao Unicode para garantir 0% de pontuação antispam"""
     import re
     emoji_pattern = re.compile(
         "["
@@ -55,15 +55,19 @@ def remove_emojis(text: str) -> str:
         "\U0001F300-\U0001F5FF"
         "\U0001F680-\U0001F6FF"
         "\U0001F1E0-\U0001F1FF"
-        "\U0002600-\U00026FF"
-        "\U0002700-\U00027BF"
+        "\U00002600-\U000026FF"
+        "\U00002700-\U000027BF"
         "\U0001F900-\U0001F9FF"
+        "\uFE00-\uFE0F"
+        "\u200D"
         "]+", flags=re.UNICODE
     )
     clean = emoji_pattern.sub("", text)
     # Remover múltiplos espaços
     clean = re.sub(r' +', ' ', clean)
     return clean.strip()
+
+
 
 def send_email_alert(subject: str, message: str) -> bool:
     """Envia alerta por Email via SMTP. Garantia de 0% emojis no assunto e corpo."""
