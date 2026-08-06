@@ -9,10 +9,12 @@ O sistema NUNCA executa ordens de forma autónoma. O output máximo é um alerta
 
 import os
 import logging
+from typing import Optional, List, Dict, Union
 from datetime import datetime, timedelta
 import requests
 from sqlalchemy import text
 from app.database import engine
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
