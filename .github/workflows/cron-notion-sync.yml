@@ -42,14 +42,34 @@ jobs:
           NOTION_CLAUDE_CLOSE_DATABASE_ID: ${{ secrets.NOTION_CLAUDE_CLOSE_DATABASE_ID }}
           NOTION_CLAUDE_REGIME_DATABASE_ID: ${{ secrets.NOTION_CLAUDE_REGIME_DATABASE_ID || secrets.NOTION_PAINEL_MERCADO_DATABASE_ID }}
           NOTION_CALENDAR_DB_ID: ${{ secrets.NOTION_CALENDAR_DB_ID }}
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SERVER_HOSTINGER: ${{ secrets.SMTP_SERVER_HOSTINGER }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER_HOSTINGER || secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || '465' }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_HOSTINGER_PASSWD: ${{ secrets.SMTP_HOSTINGER_PASSWD }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_HOSTINGER_PASSWD || secrets.SMTP_PASSWORD }}
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM || secrets.SMTP_USERNAME }}
+          ALERT_EMAIL_FROM_NAME: ${{ secrets.ALERT_EMAIL_FROM_NAME || 'Trader AI' }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: |
           python scripts/sync_notion_claude.py
           python scripts/run_liquidity_analysis.py
           python scripts/sync_calendar_notion.py
+
+      - name: Notificar Falha Crítica por Email (Contingência)
+        if: failure()
+        env:
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM || secrets.SMTP_USERNAME }}
+          ALERT_EMAIL_FROM_NAME: ${{ secrets.ALERT_EMAIL_FROM_NAME || 'Trader AI' }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          SMTP_SERVER_HOSTINGER: ${{ secrets.SMTP_SERVER_HOSTINGER }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER_HOSTINGER || secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || '465' }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_HOSTINGER_PASSWD: ${{ secrets.SMTP_HOSTINGER_PASSWD }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_HOSTINGER_PASSWD || secrets.SMTP_PASSWORD }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: |
+          python -c "import sys; sys.path.append('backend'); from app.services.alert_service import send_alert_notification; send_alert_notification('🚨 [FALHA CRÍTICA GITHUB ACTIONS] O workflow Sync Notion (Claude) falhou na execução!')"
+

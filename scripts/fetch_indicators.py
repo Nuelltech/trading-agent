@@ -266,7 +266,13 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         logging.error(f"❌ Erro fatal no pipeline de indicadores: {e}")
+        try:
+            from app.services.alert_service import send_alert_notification
+            send_alert_notification(f"🚨 [FALHA CRÍTICA INGESTÃO] Ingestão de Indicadores falhou: {type(e).__name__} - {e}")
+        except Exception as alert_err:
+            logging.warning(f"Não foi possível enviar e-mail de notificação de falha: {alert_err}")
         raise
+
     finally:
         # Fechar pool de conexões graciosamente para evitar ConnectionResetError
         # cosmético ao encerrar o processo (MySQL server has gone away)

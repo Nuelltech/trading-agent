@@ -273,6 +273,14 @@ def main():
         
         earnings_records = fetch_corporate_earnings_fmp()
         save_corporate_earnings(earnings_records)
+    except Exception as e:
+        logging.error(f"❌ Erro fatal no pipeline de Calendário Económico: {e}")
+        try:
+            from app.services.alert_service import send_alert_notification
+            send_alert_notification(f"🚨 [FALHA CRÍTICA INGESTÃO] Calendário Económico falhou: {type(e).__name__} - {e}")
+        except Exception as alert_err:
+            logging.warning(f"Não foi possível enviar e-mail de notificação de falha: {alert_err}")
+        raise
     finally:
         try:
             engine.dispose()
@@ -281,4 +289,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

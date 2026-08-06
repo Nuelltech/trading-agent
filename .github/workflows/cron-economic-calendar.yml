@@ -34,6 +34,16 @@ jobs:
           MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
           ALPHA_VANTAGE_KEY: ${{ secrets.ALPHA_VANTAGE_KEY }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM || secrets.SMTP_USERNAME }}
+          ALERT_EMAIL_FROM_NAME: ${{ secrets.ALERT_EMAIL_FROM_NAME || 'Trader AI' }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          SMTP_SERVER_HOSTINGER: ${{ secrets.SMTP_SERVER_HOSTINGER }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER_HOSTINGER || secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || '465' }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_HOSTINGER_PASSWD: ${{ secrets.SMTP_HOSTINGER_PASSWD }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_HOSTINGER_PASSWD || secrets.SMTP_PASSWORD }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: |
           python scripts/fetch_economic_calendar.py
 
@@ -46,3 +56,20 @@ jobs:
           MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
         run: |
           python -m unittest tests/test_data_integrity.py
+
+      - name: Notificar Falha Crítica por Email (Contingência)
+        if: failure()
+        env:
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM || secrets.SMTP_USERNAME }}
+          ALERT_EMAIL_FROM_NAME: ${{ secrets.ALERT_EMAIL_FROM_NAME || 'Trader AI' }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          SMTP_SERVER_HOSTINGER: ${{ secrets.SMTP_SERVER_HOSTINGER }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER_HOSTINGER || secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || '465' }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_HOSTINGER_PASSWD: ${{ secrets.SMTP_HOSTINGER_PASSWD }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_HOSTINGER_PASSWD || secrets.SMTP_PASSWORD }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: |
+          python -c "import sys; sys.path.append('backend'); from app.services.alert_service import send_alert_notification; send_alert_notification('🚨 [FALHA CRÍTICA GITHUB ACTIONS] O workflow Ingestão de Calendário Económico falhou na execução!')"
+

@@ -153,9 +153,18 @@ def log_anomaly(target_table: str, symbol_or_event: str, raw_value: Any, expecte
                     "anomaly_type": anomaly_type,
                     "anomaly_reason": anomaly_reason
                 })
-            trans.commit()
+                trans.commit()
+                
+                # Disparar notificação imediata por email de entrada em quarentena
+                try:
+                    from app.services.alert_service import send_alert_notification
+                    quarantine_alert = f"⚠️ NOVO DADO EM QUARENTENA: [{symbol_or_event}] | Tipo: {anomaly_type} | Motivo: {anomaly_reason}"
+                    send_alert_notification(quarantine_alert)
+                except Exception as alert_err:
+                    logging.warning(f"Não foi possível enviar email de alerta de quarentena: {alert_err}")
     except Exception as e:
         logging.error(f"Erro ao gravar na tabela data_anomalies_log: {e}")
+
 
 def validate_ohlc_record(record: Dict[str, Any]) -> Tuple[bool, Dict[str, Any], str]:
     """
