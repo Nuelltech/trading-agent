@@ -86,10 +86,12 @@ def run_liquidity_analysis_pipeline():
             logging.error(f"Erro ao analisar liquidez para {symbol}: {e}")
 
     # 3. Monitor de SLA de Quarentena (Alerta de dados em falta > 12h)
+    sla_violations = check_quarantine_sla_violations(hours_threshold=12)
     if sla_violations >= 0:
         logging.info(f"🎉 Pipeline de Liquidez Concluído: {alerts_triggered} Alertas Analíticos Disparados | {sla_violations} Violações SLA Quarentena.")
     else:
         logging.warning(f"⚠️ Pipeline de Liquidez Concluído: {alerts_triggered} Alertas Analíticos Disparados | SLA Quarentena NÃO VERIFICADO (Erro DB).")
+
 
 
 if __name__ == "__main__":
