@@ -50,7 +50,7 @@ PLAUSIBILITY_LIMITS = {
     "BABA": {"min": 20.0, "max": 400.0},
     "BBVA": {"min": 2.0, "max": 30.0},
     "JPM": {"min": 50.0, "max": 400.0},
-    "MU": {"min": 15.0, "max": 300.0}
+    "MU": {"min": 15.0, "max": 1500.0}
 }
 
 # 2. Limiares de Spikes por Classe de Ativo (Evita Alert Fatigue)
@@ -127,25 +127,26 @@ def log_anomaly(target_table: str, symbol_or_event: str, raw_value: Any, expecte
 
             if existing:
                 anomaly_id, occurrences = existing[0], existing[1] + 1
+                new_status = 'ESCALATED_RECURRING' if occurrences >= 5 else 'PENDING'
                 update_sql = text("""
                     UPDATE data_anomalies_log 
                     SET occurrences = :occurrences, repeat_count = :occurrences, raw_value = :raw_value, 
-                        anomaly_reason = :anomaly_reason, last_seen = NOW()
+                        anomaly_reason = :anomaly_reason, status = :status, last_seen = NOW()
                     WHERE id = :id
                 """)
                 conn.execute(update_sql, {
                     "id": anomaly_id,
                     "occurrences": occurrences,
                     "raw_value": str(raw_value),
-                    "anomaly_reason": anomaly_reason
+                    "anomaly_reason": anomaly_reason,
+                    "status": new_status
                 })
-                logging.info(f"🔄 Anomalia deduplicada para {symbol_or_event} (Ocorrências: {occurrences})")
+                logging.info(f"🔄 Anomalia deduplicada para {symbol_or_event} (Ocorrências: {occurrences}, Status: {new_status})")
                 
                 # Regra de Escalonamento Urgente (ESCALATION_THRESHOLD = 5)
                 if occurrences >= 5:
-                    urgent_msg = f"⚠️ PERSISTENTE: [{symbol_or_event}] falha há {occurrences} corridas consecutivas — requer intervenção manual na fonte, não só quarentena."
-                    logging.error(f"🚨 ALERTA URGENTE DE ESCALONAMENTO: {urgent_msg}")
-                    # Enviar notificação secundária urgente se conetor configurado
+                    urgent_msg = f"🚨 ESCALATED_RECURRING: [{symbol_or_event}] falhou {occurrences} vezes consecutivas — requer intervenção urgente na origem."
+                    logging.error(urgent_msg)
                     try:
                         from app.services.alert_service import send_alert_notification
                         send_alert_notification(urgent_msg)
@@ -290,10 +291,20 @@ def validate_economic_calendar_records(records: List[Dict[str, Any]]) -> Tuple[L
     return valid, rejected
 
 
-def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: float, novo_low: float, novo_close: float, volume: int = 0) -> Dict[str, Any]:
+def promover_para_producao(
+    ticker: str, 
+    data: str, 
+    novo_open: Optional[float], 
+    novo_high: Optional[float], 
+    novo_low: Optional[float], 
+    novo_close: float, 
+    volume: int = 0,
+    novo_adj_close: Optional[float] = None
+) -> Dict[str, Any]:
     """
     Promove uma cotação para a tabela de produção `indicator_values` com lógica de Upsert.
     Garante integridade matemática estrita de OHLC (High >= max(Open, Close) e Low <= min(Open, Close)).
+    Garante que se uma abertura sintética (O=H=L=C) for inserida inicialmente, pode ser atualizada por um Open real de mercado.
     """
     ts = str(data)[:10] + " 00:00:00" if len(str(data)) <= 10 else str(data)
     
@@ -307,26 +318,42 @@ def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: 
                     return {"status": "error", "message": f"Ticker {ticker} não encontrado no catálogo."}
                 indicator_id = cat_row[0]
 
-                query_prod = text("SELECT id, open_val, high_val, low_val, value, volume FROM indicator_values WHERE symbol = :symbol AND timestamp = :ts")
+                query_prod = text("SELECT id, open_val, high_val, low_val, value, volume, adj_close FROM indicator_values WHERE symbol = :symbol AND timestamp = :ts")
                 existing = conn.execute(query_prod, {"symbol": ticker, "ts": ts}).fetchone()
 
                 novo_open_f = float(novo_open) if novo_open is not None else float(novo_close)
                 novo_high_f = float(novo_high) if novo_high is not None else float(novo_close)
                 novo_low_f = float(novo_low) if novo_low is not None else float(novo_close)
                 novo_close_f = float(novo_close)
+                novo_adj_close_f = float(novo_adj_close) if novo_adj_close is not None else None
 
                 if existing:
-                    ext_id, ext_open, ext_high, ext_low, ext_val, ext_vol = existing
+                    ext_id, ext_open, ext_high, ext_low, ext_val, ext_vol, ext_adj = existing
                     
-                    open_final = float(ext_open) if ext_open is not None else novo_open_f
+                    ext_open_f = float(ext_open) if ext_open is not None else novo_open_f
+                    ext_high_f = float(ext_high) if ext_high is not None else novo_high_f
+                    ext_low_f = float(ext_low) if ext_low is not None else novo_low_f
+                    ext_val_f = float(ext_val) if ext_val is not None else novo_close_f
+
+                    # Deteção de Abertura Sintética Provisória (O = H = L = C na inserção original)
+                    is_prev_synthetic = (ext_open_f == ext_high_f == ext_low_f == ext_val_f)
+                    is_new_real = (novo_open_f != novo_close_f or novo_high_f != novo_low_f)
+
+                    # Se a abertura gravada era sintética e agora recebemos dados reais de mercado, atualizamos o Open!
+                    if is_prev_synthetic and is_new_real:
+                        open_final = novo_open_f
+                        logging.info(f"🔄 Abertura sintética de {ticker} ({ext_open_f}) atualizada para Open real de mercado ({novo_open_f}).")
+                    else:
+                        open_final = ext_open_f
+
                     close_final = novo_close_f
+                    adj_close_final = novo_adj_close_f if novo_adj_close_f is not None else (float(ext_adj) if ext_adj is not None else None)
                     
                     # Regra Matemática Absoluta: High é sempre o máximo de todos os pontos conhecidos da sessão
-                    raw_high = max(float(ext_high if ext_high is not None else novo_high_f), novo_high_f)
+                    raw_high = max(ext_high_f, novo_high_f)
                     high_final = max(raw_high, open_final, close_final)
                     
                     # Regra Matemática Absoluta: Low é sempre o mínimo de todos os pontos conhecidos da sessão
-                    ext_low_f = float(ext_low) if ext_low is not None else novo_low_f
                     raw_low = min(ext_low_f, novo_low_f) if (ext_low_f > 0 and novo_low_f > 0) else (novo_low_f if novo_low_f > 0 else ext_low_f)
                     low_final = min(raw_low, open_final, close_final)
                     
@@ -334,12 +361,14 @@ def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: 
 
                     sql_update = text("""
                         UPDATE indicator_values 
-                        SET value = :value, high_val = :high_val, low_val = :low_val, volume = :volume
+                        SET value = :value, adj_close = :adj_close, open_val = :open_val, high_val = :high_val, low_val = :low_val, volume = :volume
                         WHERE id = :id
                     """)
                     conn.execute(sql_update, {
                         "id": ext_id,
                         "value": close_final,
+                        "adj_close": adj_close_final,
+                        "open_val": open_final,
                         "high_val": high_final,
                         "low_val": low_final,
                         "volume": vol_final
@@ -352,6 +381,7 @@ def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: 
                         "high_val": high_final,
                         "low_val": low_final,
                         "value": close_final,
+                        "adj_close": adj_close_final,
                         "volume": vol_final
                     }
                 else:
@@ -359,17 +389,19 @@ def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: 
                     close_final = novo_close_f
                     high_final = max(novo_high_f, open_final, close_final)
                     low_final = min(novo_low_f, open_final, close_final)
+                    adj_close_final = novo_adj_close_f
 
                     sql_insert = text("""
                         INSERT INTO indicator_values 
-                        (indicator_id, symbol, timestamp, value, open_val, high_val, low_val, volume)
-                        VALUES (:indicator_id, :symbol, :ts, :value, :open_val, :high_val, :low_val, :volume)
+                        (indicator_id, symbol, timestamp, value, adj_close, open_val, high_val, low_val, volume)
+                        VALUES (:indicator_id, :symbol, :ts, :value, :adj_close, :open_val, :high_val, :low_val, :volume)
                     """)
                     conn.execute(sql_insert, {
                         "indicator_id": indicator_id,
                         "symbol": ticker,
                         "ts": ts,
                         "value": close_final,
+                        "adj_close": adj_close_final,
                         "open_val": open_final,
                         "high_val": high_final,
                         "low_val": low_final,
@@ -383,6 +415,7 @@ def promover_para_producao(ticker: str, data: str, novo_open: float, novo_high: 
                         "high_val": high_final,
                         "low_val": low_final,
                         "value": close_final,
+                        "adj_close": adj_close_final,
                         "volume": int(volume or 0)
                     }
             except Exception as e:

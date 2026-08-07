@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS indicator_values (
     symbol VARCHAR(50) NOT NULL,
     timestamp DATETIME NOT NULL,
     value DECIMAL(16, 6) NOT NULL, -- Preço de fecho ou valor do indicador
+    adj_close DECIMAL(16, 6), -- Preço de fecho ajustado por dividendos/splits
     open_val DECIMAL(16, 6),
     high_val DECIMAL(16, 6),
     low_val DECIMAL(16, 6),
@@ -42,9 +43,9 @@ INSERT INTO indicators_catalog (name, category, ticker, data_provider, region, v
 ('ICE BofA MOVE Index', 'VOLATILITY', 'MOVE', 'FRED_API', 'EUA', 1.0, 'Volatilidade do Mercado de Obrigações EUA'),
 
 -- Obrigações Soberanas (Yields & ETFs)
-('US 10-Year Treasury Yield', 'BONDS', '^TNX', 'YFINANCE', 'EUA', 1.0, 'Yield US 10Y'),
+('US 10-Year Treasury Yield', 'BONDS', '^TNX', 'YFINANCE', 'EUA', 0.1, 'Yield US 10Y'),
 ('US 2-Year Treasury Yield', 'BONDS', 'DGS2', 'FRED_API', 'EUA', 1.0, 'Yield US 2Y vinda da FRED API'),
-('US 30-Year Treasury Yield', 'BONDS', '^TYX', 'YFINANCE', 'EUA', 1.0, 'Yield US 30Y'),
+('US 30-Year Treasury Yield', 'BONDS', '^TYX', 'YFINANCE', 'EUA', 0.1, 'Yield US 30Y'),
 ('US 10-Year Breakeven Inflation Rate', 'BONDS', 'T10YIE', 'FRED_API', 'EUA', 1.0, 'Breakeven Inflation US 10Y'),
 ('Bund Alemão 10-Year Yield', 'BONDS', 'IRLTLT01DEM156N', 'FRED_API', 'Europa', 1.0, 'Referência dívida Zona Euro'),
 ('Gilt UK 10-Year Yield', 'BONDS', 'IRLTLT01GBM156N', 'FRED_API', 'Reino Unido', 1.0, 'Referência dívida UK'),

@@ -86,6 +86,7 @@ def fetch_yfinance_data(yf_map: dict):
             if not df.empty:
                 latest = df.iloc[-1]
                 close_val = float(latest["Close"]) * info["multiplier"]
+                adj_close_val = float(latest["Adj Close"]) * info["multiplier"] if "Adj Close" in latest and not pd.isna(latest["Adj Close"]) else close_val
                 open_val = float(latest["Open"]) * info["multiplier"] if "Open" in latest else None
                 high_val = float(latest["High"]) * info["multiplier"] if "High" in latest else None
                 low_val = float(latest["Low"]) * info["multiplier"] if "Low" in latest else None
@@ -102,6 +103,7 @@ def fetch_yfinance_data(yf_map: dict):
                     "name": info["name"],
                     "timestamp": latest.name.strftime("%Y-%m-%d %H:%M:%S"),
                     "value": round(close_val, 6),
+                    "adj_close": round(adj_close_val, 6) if adj_close_val else None,
                     "open_val": round(open_val, 6) if open_val else None,
                     "high_val": round(high_val, 6) if high_val else None,
                     "low_val": round(low_val, 6) if low_val else None,
@@ -135,6 +137,7 @@ def fetch_fred_data(fred_map: dict):
                         "name": info["name"],
                         "timestamp": f"{dt} 00:00:00",
                         "value": val,
+                        "adj_close": val,
                         "open_val": None,
                         "high_val": None,
                         "low_val": None,
@@ -162,8 +165,8 @@ def save_records_to_db(records):
             # 1. Escrever na tabela Staging
             for rec in records:
                 sql_staging = text("""
-                    INSERT INTO staging_indicator_values (symbol, timestamp, open_val, high_val, low_val, value, volume)
-                    VALUES (:symbol, :timestamp, :open_val, :high_val, :low_val, :value, :volume)
+                    INSERT INTO staging_indicator_values (symbol, timestamp, open_val, high_val, low_val, value, adj_close, volume)
+                    VALUES (:symbol, :timestamp, :open_val, :high_val, :low_val, :value, :adj_close, :volume)
                 """)
                 conn.execute(sql_staging, {
                     "symbol": rec["symbol"],
@@ -172,6 +175,7 @@ def save_records_to_db(records):
                     "high_val": rec["high_val"],
                     "low_val": rec["low_val"],
                     "value": rec["value"],
+                    "adj_close": rec.get("adj_close"),
                     "volume": rec["volume"]
                 })
             trans.commit()
@@ -201,7 +205,8 @@ def save_records_to_db(records):
                 novo_high=sanitized_rec["high_val"],
                 novo_low=sanitized_rec["low_val"],
                 novo_close=sanitized_rec["value"],
-                volume=sanitized_rec.get("volume", 0)
+                volume=sanitized_rec.get("volume", 0),
+                novo_adj_close=sanitized_rec.get("adj_close")
             )
             if res.get("status") in ["inserted", "updated"]:
                 saved_count += 1

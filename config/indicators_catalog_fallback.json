@@ -32,7 +32,7 @@
     "category": "BONDS",
     "data_provider": "YFINANCE",
     "region": "EUA",
-    "value_multiplier": 1.0,
+    "value_multiplier": 0.1,
     "is_active": true
   },
   {
@@ -50,7 +50,7 @@
     "category": "BONDS",
     "data_provider": "YFINANCE",
     "region": "EUA",
-    "value_multiplier": 1.0,
+    "value_multiplier": 0.1,
     "is_active": true
   },
   {
