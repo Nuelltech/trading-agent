@@ -15,9 +15,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # 1. Limites Rígidos de Plausibilidade por Ticker (Boundary Check)
 PLAUSIBILITY_LIMITS = {
     "^VIX": {"min": 8.0, "max": 90.0},
+    "MOVE": {"min": 20.0, "max": 300.0},
     "^TNX": {"min": 0.5, "max": 10.0},
     "^TYX": {"min": 0.5, "max": 10.0},
     "^IRX": {"min": 0.1, "max": 10.0},
+    "T10YIE": {"min": 0.1, "max": 8.0},
+    "IRLTLT01ITM156N": {"min": 0.1, "max": 12.0},
     "EURUSD=X": {"min": 0.80, "max": 1.60},
     "GBPUSD=X": {"min": 0.90, "max": 2.10},
     "USDJPY=X": {"min": 90.0, "max": 200.0},
@@ -28,6 +31,7 @@ PLAUSIBILITY_LIMITS = {
     "CL=F": {"min": 25.0, "max": 140.0},
     "BZ=F": {"min": 30.0, "max": 150.0},
     "HG=F": {"min": 2.0, "max": 10.0},
+    "CC=F": {"min": 1000.0, "max": 15000.0},
     "^GSPC": {"min": 2000.0, "max": 10000.0},
     "^NDX": {"min": 5000.0, "max": 40000.0},
 
@@ -39,15 +43,24 @@ PLAUSIBILITY_LIMITS = {
     "F": {"min": 5.0, "max": 40.0},
     "ENPH": {"min": 15.0, "max": 400.0},
     "NKE": {"min": 30.0, "max": 200.0},
-    "STLA": {"min": 3.0, "max": 40.0}
+    "STLA": {"min": 3.0, "max": 40.0},
+    "NVDA": {"min": 20.0, "max": 500.0},
+    "TSM": {"min": 20.0, "max": 500.0},
+    "ASML": {"min": 100.0, "max": 2000.0},
+    "BABA": {"min": 20.0, "max": 400.0},
+    "BBVA": {"min": 2.0, "max": 30.0},
+    "JPM": {"min": 50.0, "max": 400.0},
+    "MU": {"min": 15.0, "max": 300.0}
 }
 
 # 2. Limiares de Spikes por Classe de Ativo (Evita Alert Fatigue)
 SPIKE_THRESHOLDS = {
     "^VIX": 0.30,        # 30% - VIX oscila fortemente em momentos de pânico real
+    "MOVE": 0.25,        # 25% - MOVE Index volatilidade de obrigações
     "^KS11": 0.20,       # 20% - Kospi Index em recuperações pós-decisão de política
     "BZ=F": 0.12,        # 12% - Petróleo Brent afetado por choques geopolíticos
     "CL=F": 0.12,        # 12% - Petróleo WTI
+    "CC=F": 0.15,        # 15% - Futuros de Cacau
     "GC=F": 0.08,        # 8%  - Ouro
     "^TNX": 0.08,        # 8%  - Bond Yields em variação % diária
     "^TYX": 0.08,        # 8%  - Bond Yields 30Y
