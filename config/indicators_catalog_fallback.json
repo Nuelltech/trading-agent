@@ -18,10 +18,10 @@
     "is_active": true
   },
   {
-    "ticker": "MOVE",
+    "ticker": "^MOVE",
     "name": "ICE BofA MOVE Index",
     "category": "VOLATILITY",
-    "data_provider": "FRED_API",
+    "data_provider": "YFINANCE",
     "region": "EUA",
     "value_multiplier": 1.0,
     "is_active": true

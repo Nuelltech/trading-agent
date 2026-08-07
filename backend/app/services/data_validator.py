@@ -16,6 +16,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 PLAUSIBILITY_LIMITS = {
     "^VIX": {"min": 8.0, "max": 90.0},
     "MOVE": {"min": 20.0, "max": 300.0},
+    "^MOVE": {"min": 20.0, "max": 300.0},
     "^TNX": {"min": 0.5, "max": 10.0},
     "^TYX": {"min": 0.5, "max": 10.0},
     "^IRX": {"min": 0.1, "max": 10.0},
@@ -57,6 +58,7 @@ PLAUSIBILITY_LIMITS = {
 SPIKE_THRESHOLDS = {
     "^VIX": 0.30,        # 30% - VIX oscila fortemente em momentos de pânico real
     "MOVE": 0.25,        # 25% - MOVE Index volatilidade de obrigações
+    "^MOVE": 0.25,       # 25% - MOVE Index volatilidade de obrigações
     "^KS11": 0.20,       # 20% - Kospi Index em recuperações pós-decisão de política
     "BZ=F": 0.12,        # 12% - Petróleo Brent afetado por choques geopolíticos
     "CL=F": 0.12,        # 12% - Petróleo WTI
