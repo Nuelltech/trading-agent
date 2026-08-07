@@ -5,7 +5,7 @@ Implementa os 6 pilares de integridade de dados e as especificações técnicas 
 """
 
 import logging
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from datetime import datetime
 from sqlalchemy import text
 from app.database import engine
