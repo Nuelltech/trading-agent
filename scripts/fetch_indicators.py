@@ -21,77 +21,66 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 
-YFINANCE_MAP = {
-    # Volatilidade
-    "^VIX": {"name": "VIX", "multiplier": 1.0, "save_ticker": "^VIX"},
-    "^V2TX": {"name": "VSTOXX Euro Volatility", "multiplier": 1.0, "save_ticker": "VSTOXX"},
-    
-    # Obrigações EUA
-    "^TNX": {"name": "US 10Y Yield", "multiplier": 1.0},
-    "^TYX": {"name": "US 30Y Yield", "multiplier": 1.0},
-    "TLT":  {"name": "TLT ETF", "multiplier": 1.0},
-    
-    # Forex
-    "DX-Y.NYB": {"name": "DXY Dollar Index", "multiplier": 1.0},
-    "EURUSD=X": {"name": "EUR/USD", "multiplier": 1.0},
-    "USDJPY=X": {"name": "USD/JPY", "multiplier": 1.0},
-    "GBPUSD=X": {"name": "GBP/USD", "multiplier": 1.0},
-    "USDCNH=X": {"name": "USD/CNH", "multiplier": 1.0},
-    "USDCHF=X": {"name": "USD/CHF", "multiplier": 1.0},
-    
-    # Commodities
-    "BZ=F": {"name": "Brent Crude", "multiplier": 1.0},
-    "CL=F": {"name": "WTI Crude", "multiplier": 1.0},
-    "GC=F": {"name": "Gold Futures", "multiplier": 1.0},
-    "SI=F": {"name": "Silver Futures", "multiplier": 1.0},
-    "HG=F": {"name": "Copper Futures", "multiplier": 1.0},
-    "NG=F": {"name": "Natural Gas", "multiplier": 1.0},
-    
-    # Índices Américas
-    "^GSPC": {"name": "S&P 500", "multiplier": 1.0},
-    "^NDX":  {"name": "Nasdaq 100", "multiplier": 1.0},
-    "^DJI":  {"name": "Dow Jones", "multiplier": 1.0},
-    "^RUT":  {"name": "Russell 2000", "multiplier": 1.0},
-    "^SOX":  {"name": "SOX Semiconductor", "multiplier": 1.0},
-    
-    # Índices Europa
-    "^GDAXI":    {"name": "DAX 40", "multiplier": 1.0},
-    "^FCHI":     {"name": "CAC 40", "multiplier": 1.0},
-    "^FTSE":     {"name": "FTSE 100", "multiplier": 1.0},
-    "^STOXX50E": {"name": "Euro Stoxx 50", "multiplier": 1.0},
-    "^IBEX":     {"name": "IBEX 35", "multiplier": 1.0},
-    
-    # Índices Ásia
-    "^N225":     {"name": "Nikkei 225", "multiplier": 1.0},
-    "^HSI":      {"name": "Hang Seng", "multiplier": 1.0},
-    "000001.SS": {"name": "Shanghai Composite", "multiplier": 1.0},
-    "^KS11":     {"name": "Kospi", "multiplier": 1.0},
-    "^AXJO":     {"name": "ASX 200", "multiplier": 1.0},
-    
-    # Ações Inventário
-    "O":    {"name": "Realty Income", "multiplier": 1.0},
-    "DAL":  {"name": "Delta Air Lines", "multiplier": 1.0},
-    "F":    {"name": "Ford Motor", "multiplier": 1.0},
-    "ENPH": {"name": "Enphase Energy", "multiplier": 1.0},
-    "NKE":  {"name": "Nike", "multiplier": 1.0},
-    "STLA": {"name": "Stellantis", "multiplier": 1.0},
-}
+def load_indicators_catalog():
+    """
+    Carrega o catálogo de indicadores prioritariamente da base de dados MySQL (indicators_catalog).
+    Se a DB estiver indisponível, utiliza o fallback em config/indicators_catalog_fallback.json.
+    Retorna dois dicionários: (yf_map, fred_map).
+    """
+    catalog_items = []
+    try:
+        with engine.connect() as conn:
+            sql = text("SELECT ticker, name, data_provider, value_multiplier FROM indicators_catalog WHERE is_active = TRUE")
+            rows = conn.execute(sql).fetchall()
+            for r in rows:
+                catalog_items.append({
+                    "ticker": r[0],
+                    "name": r[1] or r[0],
+                    "data_provider": r[2] or "YFINANCE",
+                    "value_multiplier": float(r[3]) if r[3] is not None else 1.0
+                })
+        logging.info(f"✅ Catálogo de indicadores carregado da DB MySQL ({len(catalog_items)} ativos).")
+    except Exception as e:
+        logging.warning(f"⚠️ Erro ao consultar indicators_catalog na DB ({e}). Carregando fallback JSON...")
+        fallback_path = os.path.join(os.path.dirname(__file__), "..", "config", "indicators_catalog_fallback.json")
+        try:
+            with open(fallback_path, "r", encoding="utf-8") as f:
+                catalog_items = json.load(f)
+            logging.info(f"✅ Fallback JSON carregado com sucesso ({len(catalog_items)} ativos).")
+        except Exception as json_err:
+            logging.error(f"❌ Erro ao ler fallback JSON ({json_err}).")
+            catalog_items = []
 
-FRED_MAP = {
-    "DGS2":            {"name": "US 2Y Treasury Yield"},
-    "IRLTLT01DEM156N": {"name": "Bund Alemão 10Y Yield"},
-    "IRLTLT01GBM156N": {"name": "Gilt UK 10Y Yield"},
-    "IRLTLT01JPM156N": {"name": "JGB Japonês 10Y Yield"},
-}
+    yf_map = {}
+    fred_map = {}
 
-def fetch_yfinance_data():
+    for item in catalog_items:
+        ticker = item["ticker"]
+        name = item.get("name", ticker)
+        provider = str(item.get("data_provider", "YFINANCE")).upper()
+        multiplier = float(item.get("value_multiplier", 1.0))
+
+        if provider == "FRED_API":
+            fred_map[ticker] = {"name": name}
+        else:
+            if ticker == "VSTOXX":
+                yf_map["^V2TX"] = {"name": name, "multiplier": multiplier, "save_ticker": "VSTOXX"}
+            else:
+                yf_map[ticker] = {"name": name, "multiplier": multiplier}
+
+    return yf_map, fred_map
+
+def fetch_yfinance_data(yf_map: dict):
     logging.info("Buscando cotações via yfinance...")
-    tickers_list = list(YFINANCE_MAP.keys())
+    tickers_list = list(yf_map.keys())
+    if not tickers_list:
+        logging.warning("⚠️ Nenhum ticker yfinance configurado para busca.")
+        return []
     
     data = yf.download(tickers=tickers_list, period="5d", interval="1d", group_by="ticker", progress=False)
     
     records = []
-    for ticker, info in YFINANCE_MAP.items():
+    for ticker, info in yf_map.items():
         try:
             df = data[ticker].dropna() if len(tickers_list) > 1 else data.dropna()
             if not df.empty:
@@ -124,7 +113,7 @@ def fetch_yfinance_data():
             
     return records
 
-def fetch_fred_data():
+def fetch_fred_data(fred_map: dict):
     if not FRED_API_KEY:
         logging.warning("FRED_API_KEY não definida. Saltando busca via FRED API.")
         return []
@@ -132,7 +121,7 @@ def fetch_fred_data():
     logging.info("Buscando Yields Soberanas via FRED API...")
     records = []
     
-    for series_id, info in FRED_MAP.items():
+    for series_id, info in fred_map.items():
         try:
             url = f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}&api_key={FRED_API_KEY}&file_type=json&sort_order=desc&limit=1"
             response = requests.get(url, timeout=10)
@@ -193,54 +182,43 @@ def save_records_to_db(records):
 
     # 2. Executar Data Quality Engine & Mover para Produção (indicator_values)
     logging.info("🛡️ Executando Data Quality Engine & Validação em Produção...")
-    with engine.connect() as conn:
-        trans = conn.begin()
-        try:
-            catalog_rows = conn.execute(text("SELECT id, ticker FROM indicators_catalog")).fetchall()
-            catalog_map = {row[1]: row[0] for row in catalog_rows}
-            
-            saved_count = 0
-            quarantined_count = 0
-            
-            for rec in records:
-                is_valid, sanitized_rec, err_msg = validate_ohlc_record(rec)
-                if not is_valid:
-                    quarantined_count += 1
-                    continue
-                    
-            from app.services.data_validator import promover_para_producao
-            
-            for rec in records:
-                is_valid, sanitized_rec, err_msg = validate_ohlc_record(rec)
-                if not is_valid:
-                    quarantined_count += 1
-                    continue
-                    
-                res = promover_para_producao(
-                    ticker=sanitized_rec["symbol"],
-                    data=sanitized_rec["timestamp"],
-                    novo_open=sanitized_rec["open_val"],
-                    novo_high=sanitized_rec["high_val"],
-                    novo_low=sanitized_rec["low_val"],
-                    novo_close=sanitized_rec["value"],
-                    volume=sanitized_rec.get("volume", 0)
-                )
-                if res.get("status") in ["inserted", "updated"]:
-                    saved_count += 1
-                elif res.get("status") == "error":
-                    logging.warning(f"⚠️ Promoção de {sanitized_rec['symbol']} falhou: {res.get('message')}")
-                    
-            logging.info(f"🎉 Data Quality Concluído: {saved_count} cotações promovidas para 'indicator_values' | {quarantined_count} em quarentena.")
-        except Exception as e:
-            trans.rollback()
-            logging.error(f"❌ Erro ao processar validação em Produção: {e}")
+    try:
+        from app.services.data_validator import promover_para_producao
+        
+        saved_count = 0
+        quarantined_count = 0
+        
+        for rec in records:
+            is_valid, sanitized_rec, err_msg = validate_ohlc_record(rec)
+            if not is_valid:
+                quarantined_count += 1
+                continue
+                
+            res = promover_para_producao(
+                ticker=sanitized_rec["symbol"],
+                data=sanitized_rec["timestamp"],
+                novo_open=sanitized_rec["open_val"],
+                novo_high=sanitized_rec["high_val"],
+                novo_low=sanitized_rec["low_val"],
+                novo_close=sanitized_rec["value"],
+                volume=sanitized_rec.get("volume", 0)
+            )
+            if res.get("status") in ["inserted", "updated"]:
+                saved_count += 1
+            elif res.get("status") == "error":
+                logging.warning(f"⚠️ Promoção de {sanitized_rec['symbol']} falhou: {res.get('message')}")
+                
+        logging.info(f"🎉 Data Quality Concluído: {saved_count} cotações promovidas para 'indicator_values' | {quarantined_count} em quarentena.")
+    except Exception as e:
+        logging.error(f"❌ Erro ao processar validação em Produção: {e}")
 
 def main():
-    yf_records = fetch_yfinance_data()
-    fred_records = fetch_fred_data()
+    yf_map, fred_map = load_indicators_catalog()
+    yf_records = fetch_yfinance_data(yf_map)
+    fred_records = fetch_fred_data(fred_map)
     
     total_records = yf_records + fred_records
-    logging.info(f"Total de {len(total_records)}/42 indicadores recolhidos com sucesso!")
+    logging.info(f"Total de {len(total_records)} indicadores recolhidos com sucesso!")
     
     # Identificar tickers ausentes do catálogo e reportar no log
     fetched_symbols = {r["symbol"] for r in total_records}

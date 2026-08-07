@@ -64,6 +64,7 @@ INSERT INTO indicators_catalog (name, category, ticker, data_provider, region, v
 ('Silver Futures', 'COMMODITIES', 'SI=F', 'YFINANCE', 'Global', 1.0, 'Futuros de Prata'),
 ('Copper Futures', 'COMMODITIES', 'HG=F', 'YFINANCE', 'Global', 1.0, 'Futuros de Cobre ("Dr. Copper")'),
 ('Natural Gas Futures', 'COMMODITIES', 'NG=F', 'YFINANCE', 'Global', 1.0, 'Futuros Gás Natural'),
+('Cocoa Futures', 'COMMODITIES', 'CC=F', 'YFINANCE', 'Global', 1.0, 'Futuros de Cacau'),
 
 -- Índices de Ações (Américas)
 ('S&P 500', 'INDICES', '^GSPC', 'YFINANCE', 'EUA', 1.0, 'Índice Geral de Ações EUA'),

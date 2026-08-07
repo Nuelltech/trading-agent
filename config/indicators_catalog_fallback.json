@@ -1,0 +1,389 @@
+[
+  {
+    "ticker": "^VIX",
+    "name": "VIX Volatility Index",
+    "category": "VOLATILITY",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "VSTOXX",
+    "name": "VSTOXX Euro Volatility",
+    "category": "VOLATILITY",
+    "data_provider": "FRED_API",
+    "region": "Europa",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^TNX",
+    "name": "US 10-Year Treasury Yield",
+    "category": "BONDS",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "DGS2",
+    "name": "US 2-Year Treasury Yield",
+    "category": "BONDS",
+    "data_provider": "FRED_API",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^TYX",
+    "name": "US 30-Year Treasury Yield",
+    "category": "BONDS",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "IRLTLT01DEM156N",
+    "name": "Bund Alemão 10-Year Yield",
+    "category": "BONDS",
+    "data_provider": "FRED_API",
+    "region": "Europa",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "IRLTLT01GBM156N",
+    "name": "Gilt UK 10-Year Yield",
+    "category": "BONDS",
+    "data_provider": "FRED_API",
+    "region": "Reino Unido",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "IRLTLT01JPM156N",
+    "name": "JGB Japonês 10-Year Yield",
+    "category": "BONDS",
+    "data_provider": "FRED_API",
+    "region": "Japão",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "TLT",
+    "name": "iShares 20+ Year Treasury ETF",
+    "category": "BONDS",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "DX-Y.NYB",
+    "name": "US Dollar Index (DXY)",
+    "category": "FOREX",
+    "data_provider": "YFINANCE",
+    "region": "Global",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "EURUSD=X",
+    "name": "EUR/USD",
+    "category": "FOREX",
+    "data_provider": "YFINANCE",
+    "region": "Global",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "USDJPY=X",
+    "name": "USD/JPY",
+    "category": "FOREX",
+    "data_provider": "YFINANCE",
+    "region": "Global",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "GBPUSD=X",
+    "name": "GBP/USD",
+    "category": "FOREX",
+    "data_provider": "YFINANCE",
+    "region": "Global",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "USDCNH=X",
+    "name": "USD/CNH",
+    "category": "FOREX",
+    "data_provider": "YFINANCE",
+    "region": "Ásia",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "USDCHF=X",
+    "name": "USD/CHF",
+    "category": "FOREX",
+    "data_provider": "YFINANCE",
+    "region": "Europa",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "BZ=F",
+    "name": "Brent Crude Oil",
+    "category": "COMMODITIES",
+    "data_provider": "YFINANCE",
+    "region": "Global",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "CL=F",
+    "name": "WTI Crude Oil",
+    "category": "COMMODITIES",
+    "data_provider": "YFINANCE",
+    "region": "Global",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "GC=F",
+    "name": "Gold Futures",
+    "category": "COMMODITIES",
+    "data_provider": "YFINANCE",
+    "region": "Global",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "SI=F",
+    "name": "Silver Futures",
+    "category": "COMMODITIES",
+    "data_provider": "YFINANCE",
+    "region": "Global",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "HG=F",
+    "name": "Copper Futures",
+    "category": "COMMODITIES",
+    "data_provider": "YFINANCE",
+    "region": "Global",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "NG=F",
+    "name": "Natural Gas Futures",
+    "category": "COMMODITIES",
+    "data_provider": "YFINANCE",
+    "region": "Global",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "CC=F",
+    "name": "Cocoa Futures",
+    "category": "COMMODITIES",
+    "data_provider": "YFINANCE",
+    "region": "Global",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^GSPC",
+    "name": "S&P 500",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^NDX",
+    "name": "Nasdaq 100",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^DJI",
+    "name": "Dow Jones Industrial",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^RUT",
+    "name": "Russell 2000",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^SOX",
+    "name": "SOX Semiconductor Index",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^GDAXI",
+    "name": "DAX 40",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "Alemanha",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^FCHI",
+    "name": "CAC 40",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "França",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^FTSE",
+    "name": "FTSE 100",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "Reino Unido",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^STOXX50E",
+    "name": "Euro Stoxx 50",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "Europa",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^IBEX",
+    "name": "IBEX 35",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "Espanha",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^N225",
+    "name": "Nikkei 225",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "Japão",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^HSI",
+    "name": "Hang Seng",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "Hong Kong",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "000001.SS",
+    "name": "Shanghai Composite",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "China",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^KS11",
+    "name": "Kospi Index",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "Coreia do Sul",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "^AXJO",
+    "name": "ASX 200",
+    "category": "INDICES",
+    "data_provider": "YFINANCE",
+    "region": "Austrália",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "O",
+    "name": "Realty Income",
+    "category": "STOCKS",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "DAL",
+    "name": "Delta Air Lines",
+    "category": "STOCKS",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "F",
+    "name": "Ford Motor Company",
+    "category": "STOCKS",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "ENPH",
+    "name": "Enphase Energy",
+    "category": "STOCKS",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "NKE",
+    "name": "Nike",
+    "category": "STOCKS",
+    "data_provider": "YFINANCE",
+    "region": "EUA",
+    "value_multiplier": 1.0,
+    "is_active": true
+  },
+  {
+    "ticker": "STLA",
+    "name": "Stellantis",
+    "category": "STOCKS",
+    "data_provider": "YFINANCE",
+    "region": "EUA/Europa",
+    "value_multiplier": 1.0,
+    "is_active": true
+  }
+]

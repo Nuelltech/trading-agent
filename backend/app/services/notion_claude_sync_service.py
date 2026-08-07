@@ -14,6 +14,7 @@ Gere a sincronização das 3 databases exclusivas do Claude no Notion:
 """
 
 import os
+import json
 import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -301,39 +302,21 @@ def sync_claude_close_todos_ativos() -> bool:
     try:
         from app.database import engine
         with engine.connect() as conn:
-            sql = text("SELECT symbol, name, asset_class FROM indicators_catalog")
+            sql = text("SELECT ticker, name, category FROM indicators_catalog WHERE is_active = TRUE")
             rows = conn.execute(sql).fetchall()
             for r in rows:
                 all_indicators.append({"ticker": r[0], "nome": r[1] or r[0], "categoria": r[2] or "Geral"})
+        logging.info(f"✅ [CLAUDE CLOSE] {len(all_indicators)} ativos carregados do indicators_catalog da DB.")
     except Exception as e:
-        logging.warning(f"⚠️ Erro ao consultar indicators_catalog ({e}). Usando catálogo estático...")
-
-    if not all_indicators:
-        all_indicators = [
-            {"ticker": "BZ=F", "nome": "Brent Crude", "categoria": "Commodities"},
-            {"ticker": "GC=F", "nome": "Gold", "categoria": "Commodities"},
-            {"ticker": "CL=F", "nome": "WTI Crude", "categoria": "Commodities"},
-            {"ticker": "HG=F", "nome": "Copper", "categoria": "Commodities"},
-            {"ticker": "EURUSD=X", "nome": "EUR/USD", "categoria": "Forex"},
-            {"ticker": "GBPUSD=X", "nome": "GBP/USD", "categoria": "Forex"},
-            {"ticker": "USDJPY=X", "nome": "USD/JPY", "categoria": "Forex"},
-            {"ticker": "DX-Y.NYB", "nome": "US Dollar Index", "categoria": "Forex"},
-            {"ticker": "^GSPC", "nome": "S&P 500", "categoria": "Indices"},
-            {"ticker": "^NDX", "nome": "Nasdaq 100", "categoria": "Indices"},
-            {"ticker": "^GDAXI", "nome": "DAX", "categoria": "Indices"},
-            {"ticker": "^TNX", "nome": "US 10Y Yield", "categoria": "Rates"},
-            {"ticker": "DGS2", "nome": "US 2Y Yield", "categoria": "Rates"},
-            {"ticker": "IRLTLT01DEM156N", "nome": "Germany 10Y Yield", "categoria": "Rates"},
-            {"ticker": "IRLTLT01GBM156N", "nome": "UK 10Y Yield", "categoria": "Rates"},
-            {"ticker": "IRLTLT01JPM156N", "nome": "Japan 10Y Yield", "categoria": "Rates"},
-            {"ticker": "^VIX", "nome": "VIX Index", "categoria": "Volatility"},
-            {"ticker": "O", "nome": "Realty Income", "categoria": "Equities"},
-            {"ticker": "DAL", "nome": "Delta Air Lines", "categoria": "Equities"},
-            {"ticker": "F", "nome": "Ford Motor", "categoria": "Equities"},
-            {"ticker": "ENPH", "nome": "Enphase Energy", "categoria": "Equities"},
-            {"ticker": "NKE", "nome": "Nike", "categoria": "Equities"},
-            {"ticker": "STLA", "nome": "Stellantis", "categoria": "Equities"}
-        ]
+        logging.warning(f"⚠️ Erro ao consultar indicators_catalog ({e}). Carregando catálogo fallback JSON...")
+        fallback_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "indicators_catalog_fallback.json")
+        try:
+            with open(fallback_path, "r", encoding="utf-8") as f:
+                items = json.load(f)
+                all_indicators = [{"ticker": i["ticker"], "nome": i.get("name", i["ticker"]), "categoria": i.get("category", "Geral")} for i in items]
+            logging.info(f"✅ [CLAUDE CLOSE] Fallback JSON carregado com sucesso ({len(all_indicators)} ativos).")
+        except Exception as json_err:
+            logging.error(f"❌ Erro ao ler fallback JSON para Notion Sync: {json_err}")
 
     url_query = f"https://api.notion.com/v1/databases/{NOTION_CLAUDE_CLOSE_DATABASE_ID}/query"
 
