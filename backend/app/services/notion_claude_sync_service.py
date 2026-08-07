@@ -120,49 +120,57 @@ def fetch_ticker_ohlc(ticker: str, target_date: Optional[str] = None) -> Optiona
     (ex: mercado ainda não abriu no novo dia civil UTC), a função retorna None.
     Isto IMPEDE que dados do dia anterior sejam propagados e rotulados como a nova data no Notion.
     """
+def fetch_ticker_ohlc(ticker: str, target_date: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Recupera a cotação OHLC para o ticker a partir do MySQL (indicator_values).
+    Tenta primeiro a data exata solicitada. Se não houver linha na DB para a data exata,
+    retorna o registo mais recente disponível na DB com a sua data real.
+    Garante que cotações existentes no MySQL sejam SEMPRE sincronizadas para o Notion.
+    """
+    strict_target = target_date is not None
     if not target_date:
         target_date = datetime.utcnow().strftime("%Y-%m-%d")
 
-    ohlc = {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0}
+    ohlc = {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "date": target_date}
 
-    # 1. Tentar MySQL filtrando especificamente por DATE(timestamp) = target_date
+    # 1. Tentar MySQL por data exata primeiro
     try:
         from app.database import engine
         with engine.connect() as conn:
-            sql = text("""
-                SELECT open_val, high_val, low_val, value 
+            sql_exact = text("""
+                SELECT open_val, high_val, low_val, value, DATE(timestamp) 
                 FROM indicator_values 
                 WHERE symbol = :ticker AND DATE(timestamp) = :target_date
                 ORDER BY timestamp DESC LIMIT 1
             """)
-            row = conn.execute(sql, {"ticker": ticker, "target_date": target_date}).fetchone()
+            row = conn.execute(sql_exact, {"ticker": ticker, "target_date": target_date}).fetchone()
             if row and row[3] is not None:
                 ohlc["open"] = float(row[0] or row[3])
                 ohlc["high"] = float(row[1] or row[3])
                 ohlc["low"] = float(row[2] or row[3])
                 ohlc["close"] = float(row[3])
+                ohlc["date"] = str(row[4])
                 return ohlc
 
-            # 1b. Fallback para séries FRED / Obrigações Soberanas (dados mensais/diferidos): usar último valor registado na DB
-            if ticker.startswith("IRLTLT01") or ticker in ["DGS2", "VSTOXX"]:
-                sql_latest = text("""
-                    SELECT open_val, high_val, low_val, value 
-                    FROM indicator_values 
-                    WHERE symbol = :ticker 
-                    ORDER BY timestamp DESC LIMIT 1
-                """)
-                latest_row = conn.execute(sql_latest, {"ticker": ticker}).fetchone()
-                if latest_row and latest_row[3] is not None:
-                    ohlc["open"] = float(latest_row[0] or latest_row[3])
-                    ohlc["high"] = float(latest_row[1] or latest_row[3])
-                    ohlc["low"] = float(latest_row[2] or latest_row[3])
-                    ohlc["close"] = float(latest_row[3])
-                    logging.info(f"ℹ️ [{ticker}] Usando último valor FRED disponível na DB (Close={ohlc['close']}).")
-                    return ohlc
+            # 1b. Se não há registo para a data exata, usar a última cotação registada na DB com a sua data real
+            sql_latest = text("""
+                SELECT open_val, high_val, low_val, value, DATE(timestamp) 
+                FROM indicator_values 
+                WHERE symbol = :ticker 
+                ORDER BY timestamp DESC LIMIT 1
+            """)
+            latest_row = conn.execute(sql_latest, {"ticker": ticker}).fetchone()
+            if latest_row and latest_row[3] is not None:
+                ohlc["open"] = float(latest_row[0] or latest_row[3])
+                ohlc["high"] = float(latest_row[1] or latest_row[3])
+                ohlc["low"] = float(latest_row[2] or latest_row[3])
+                ohlc["close"] = float(latest_row[3])
+                ohlc["date"] = str(latest_row[4])
+                return ohlc
     except Exception as e:
         logging.warning(f"⚠️ Erro no MySQL para [{ticker}]: {e}.")
 
-    # 2. Fallback via yfinance (apenas para ativos Yahoo Finance, ignorando séries FRED)
+    # 2. Fallback via yfinance se não existir registo na DB MySQL
     if ticker.startswith("IRLTLT01") or ticker in ["DGS2", "VSTOXX"]:
         return None
 
@@ -170,20 +178,22 @@ def fetch_ticker_ohlc(ticker: str, target_date: Optional[str] = None) -> Optiona
         df = yf.Ticker(ticker).history(period="5d")
         if not df.empty:
             last_date_str = str(df.index[-1])[:10]
-            if last_date_str == target_date:
-                last = df.iloc[-1]
-                o_val = float(last.get("Open", last.get("Close", 0.0)))
-                c_val = float(last.get("Close", 0.0))
-                h_val = float(last.get("High", c_val))
-                l_val = float(last.get("Low", c_val))
+            if strict_target and last_date_str != target_date:
+                logging.info(f"ℹ️ [{ticker}] Sessão de {target_date} ainda não iniciada. Dados yfinance são de {last_date_str}.")
+                return None
 
-                ohlc["open"] = o_val
-                ohlc["close"] = c_val
-                ohlc["high"] = max(h_val, o_val, c_val)
-                ohlc["low"] = min(l_val, o_val, c_val) if l_val > 0 else min(o_val, c_val)
-                return ohlc
-            else:
-                logging.info(f"ℹ️ [{ticker}] Sessão de hoje ({target_date}) ainda não iniciada. Dados mais recentes do yfinance são de {last_date_str}.")
+            last = df.iloc[-1]
+            o_val = float(last.get("Open", last.get("Close", 0.0)))
+            c_val = float(last.get("Close", 0.0))
+            h_val = float(last.get("High", c_val))
+            l_val = float(last.get("Low", c_val))
+
+            ohlc["open"] = o_val
+            ohlc["close"] = c_val
+            ohlc["high"] = max(h_val, o_val, c_val)
+            ohlc["low"] = min(l_val, o_val, c_val) if l_val > 0 else min(o_val, c_val)
+            ohlc["date"] = last_date_str
+            return ohlc
     except Exception as ex:
         logging.warning(f"Falha yfinance para [{ticker}]: {ex}")
 
@@ -215,14 +225,16 @@ def sync_claude_ohlc_vigiados() -> bool:
         new_ohlc = fetch_ticker_ohlc(ticker, today_date)
 
         if not new_ohlc or new_ohlc["close"] == 0.0:
-            logging.info(f"ℹ️ [{ticker}] Sem dados de hoje ({today_date}) ainda. Linha no Notion mantida inalterada.")
+            logging.info(f"ℹ️ [{ticker}] Sem dados disponíveis para sincronizar no Notion.")
             continue
+
+        entry_date = new_ohlc.get("date", today_date)
 
         query_payload = {
             "filter": {
                 "and": [
                     {"property": title_col, "title": {"equals": ticker}},
-                    {"property": "Data", "date": {"equals": today_date}}
+                    {"property": "Data", "date": {"equals": entry_date}}
                 ]
             }
         }
@@ -246,8 +258,7 @@ def sync_claude_ohlc_vigiados() -> bool:
 
                 url_patch = f"https://api.notion.com/v1/pages/{page_id}"
                 requests.patch(url_patch, headers=NOTION_HEADERS, json=patch_payload, timeout=10)
-                logging.info(f"✅ [CLAUDE OHLC] [{ticker}] atualizado para {today_date} (Open={new_ohlc['open']}, High={new_ohlc['high']}, Low={new_ohlc['low']}, Close={new_ohlc['close']})")
-
+                logging.info(f"✅ [CLAUDE OHLC] [{ticker}] atualizado para {entry_date} (Open={new_ohlc['open']}, High={new_ohlc['high']}, Low={new_ohlc['low']}, Close={new_ohlc['close']})")
 
             else:
                 post_payload = {
@@ -255,7 +266,7 @@ def sync_claude_ohlc_vigiados() -> bool:
                     "properties": {
                         title_col: {"title": [{"text": {"content": ticker}}]},
                         "Nome": {"rich_text": [{"text": {"content": nome}}]},
-                        "Data": {"date": {"start": today_date}},
+                        "Data": {"date": {"start": entry_date}},
                         "Open": {"number": round(new_ohlc["open"], 4)},
                         "High": {"number": round(new_ohlc["high"], 4)},
                         "Low": {"number": round(new_ohlc["low"], 4)},
@@ -264,7 +275,7 @@ def sync_claude_ohlc_vigiados() -> bool:
                 }
                 url_post = "https://api.notion.com/v1/pages"
                 requests.post(url_post, headers=NOTION_HEADERS, json=post_payload, timeout=10)
-                logging.info(f"✅ [CLAUDE OHLC] Linha criada para [{ticker}]")
+                logging.info(f"✅ [CLAUDE OHLC] Linha criada para [{ticker}] na data {entry_date}")
 
         except Exception as e:
             logging.error(f"❌ Falha no Upsert Claude OHLC para [{ticker}]: {e}")
@@ -276,7 +287,7 @@ def sync_claude_ohlc_vigiados() -> bool:
 # -----------------------------------------------------------------------------
 def sync_claude_close_todos_ativos() -> bool:
     """
-    Processa SEMPRE todos os 36 ativos do indicators_catalog (sem depender da Configuração de Vigilância).
+    Processa SEMPRE todos os ativos do indicators_catalog (sem depender da Configuração de Vigilância).
     Upsert por dia: 1 linha por ticker/dia. Escreve Ticker (title), Nome, Categoria, Data, Close.
     """
     if not NOTION_TOKEN or not NOTION_CLAUDE_CLOSE_DATABASE_ID:
@@ -326,16 +337,16 @@ def sync_claude_close_todos_ativos() -> bool:
         cat = ind.get("categoria", "Geral")
         ohlc = fetch_ticker_ohlc(ticker, today_date)
         if not ohlc or ohlc["close"] == 0.0:
-            logging.info(f"ℹ️ [{ticker}] Sem cotação Close de hoje ({today_date}) ainda. Linha no Notion mantida inalterada.")
+            logging.info(f"ℹ️ [{ticker}] Sem cotação disponível. Linha no Notion mantida inalterada.")
             continue
         close_val = ohlc["close"]
+        entry_date = ohlc.get("date", today_date)
 
         query_payload = {
-
             "filter": {
                 "and": [
                     {"property": title_col, "title": {"equals": ticker}},
-                    {"property": date_col, "date": {"equals": today_date}}
+                    {"property": date_col, "date": {"equals": entry_date}}
                 ]
             }
         }
@@ -354,7 +365,7 @@ def sync_claude_close_todos_ativos() -> bool:
                 }
                 patch_res = requests.patch(url_patch, headers=NOTION_HEADERS, json=patch_payload, timeout=10)
                 if patch_res.status_code in [200, 201]:
-                    logging.info(f"✅ [CLAUDE CLOSE] [{ticker}] atualizado no Notion (Close={close_val})")
+                    logging.info(f"✅ [CLAUDE CLOSE] [{ticker}] atualizado no Notion para {entry_date} (Close={close_val})")
                 else:
                     logging.error(f"❌ [CLAUDE CLOSE] Erro no PATCH [{ticker}] ({patch_res.status_code}): {patch_res.text}")
             else:
@@ -362,7 +373,7 @@ def sync_claude_close_todos_ativos() -> bool:
                 props = {
                     title_col: {"title": [{"text": {"content": ticker}}]},
                     close_col: {"number": round(close_val, 4)},
-                    date_col: {"date": {"start": today_date}}
+                    date_col: {"date": {"start": entry_date}}
                 }
 
                 if name_col in db_schema:
@@ -387,7 +398,7 @@ def sync_claude_close_todos_ativos() -> bool:
                 url_post = "https://api.notion.com/v1/pages"
                 post_res = requests.post(url_post, headers=NOTION_HEADERS, json=post_payload, timeout=10)
                 if post_res.status_code in [200, 201]:
-                    logging.info(f"✅ [CLAUDE CLOSE] Linha criada para [{ticker}] (Close={close_val})")
+                    logging.info(f"✅ [CLAUDE CLOSE] Linha criada para [{ticker}] em {entry_date} (Close={close_val})")
                 else:
                     logging.error(f"❌ [CLAUDE CLOSE] Erro ao criar linha [{ticker}] ({post_res.status_code}): {post_res.text}")
 
