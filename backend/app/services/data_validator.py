@@ -79,20 +79,21 @@ def auto_resolve_anomalies(target_table: str, symbol_or_event: str):
     Mapeia também variações do nome do evento (ex: 'US Core CPI (MoM)' -> 'US Core CPI').
     """
     clean_symbol = symbol_or_event.split(" (")[0].strip() if " (" in symbol_or_event else symbol_or_event.strip()
+    pattern = f"{clean_symbol}%"
     try:
         with engine.begin() as conn:
             conn.execute(text("""
                 UPDATE data_anomalies_log 
                 SET status = 'RESOLVED_APPROVED', 
-                    last_seen = NOW()
+                    last_seen = CURRENT_TIMESTAMP
                 WHERE target_table = :target_table 
                   AND (
                     symbol_or_event = :symbol_or_event 
                     OR symbol_or_event = :clean_symbol
-                    OR symbol_or_event LIKE CONCAT(:clean_symbol, '%')
+                    OR symbol_or_event LIKE :pattern
                   )
                   AND status = 'PENDING'
-            """), {"target_table": target_table, "symbol_or_event": symbol_or_event, "clean_symbol": clean_symbol})
+            """), {"target_table": target_table, "symbol_or_event": symbol_or_event, "clean_symbol": clean_symbol, "pattern": pattern})
     except Exception as e:
         logging.debug(f"Não foi possível auto-resolver anomalias para {symbol_or_event}: {e}")
 
@@ -131,7 +132,7 @@ def log_anomaly(target_table: str, symbol_or_event: str, raw_value: Any, expecte
                 update_sql = text("""
                     UPDATE data_anomalies_log 
                     SET occurrences = :occurrences, repeat_count = :occurrences, raw_value = :raw_value, 
-                        anomaly_reason = :anomaly_reason, status = :status, last_seen = NOW()
+                        anomaly_reason = :anomaly_reason, status = :status, last_seen = CURRENT_TIMESTAMP
                     WHERE id = :id
                 """)
                 conn.execute(update_sql, {
@@ -157,7 +158,7 @@ def log_anomaly(target_table: str, symbol_or_event: str, raw_value: Any, expecte
                 insert_sql = text("""
                     INSERT INTO data_anomalies_log 
                     (target_table, symbol_or_event, raw_value, expected_range, anomaly_type, anomaly_reason, status, occurrences, repeat_count, first_seen, last_seen)
-                    VALUES (:target_table, :symbol_or_event, :raw_value, :expected_range, :anomaly_type, :anomaly_reason, 'PENDING', 1, 1, NOW(), NOW())
+                    VALUES (:target_table, :symbol_or_event, :raw_value, :expected_range, :anomaly_type, :anomaly_reason, 'PENDING', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """)
                 conn.execute(insert_sql, {
                     "target_table": target_table,
@@ -318,7 +319,7 @@ def promover_para_producao(
                     return {"status": "error", "message": f"Ticker {ticker} não encontrado no catálogo."}
                 indicator_id = cat_row[0]
 
-                query_prod = text("SELECT id, open_val, high_val, low_val, value, volume, adj_close FROM indicator_values WHERE symbol = :symbol AND timestamp = :ts")
+                query_prod = text("SELECT id, open_val, high_val, low_val, value, volume, adj_close FROM indicator_values WHERE symbol = :symbol AND (timestamp = :ts OR DATE(timestamp) = DATE(:ts))")
                 existing = conn.execute(query_prod, {"symbol": ticker, "ts": ts}).fetchone()
 
                 novo_open_f = float(novo_open) if novo_open is not None else float(novo_close)

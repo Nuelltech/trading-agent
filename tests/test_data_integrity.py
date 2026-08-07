@@ -19,6 +19,56 @@ from app.services.data_validator import (
 
 class TestDataIntegrity(unittest.TestCase):
 
+    @classmethod
+    def setUpClass(cls):
+        from app.database import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS data_anomalies_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target_table VARCHAR(100),
+                    symbol_or_event VARCHAR(100),
+                    raw_value TEXT,
+                    expected_range VARCHAR(100),
+                    anomaly_type VARCHAR(100),
+                    anomaly_reason TEXT,
+                    status VARCHAR(50) DEFAULT 'PENDING',
+                    occurrences INT DEFAULT 1,
+                    repeat_count INT DEFAULT 1,
+                    first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS indicators_catalog (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(100),
+                    category VARCHAR(50),
+                    ticker VARCHAR(50) UNIQUE,
+                    data_provider VARCHAR(50),
+                    region VARCHAR(50),
+                    value_multiplier REAL DEFAULT 1.0,
+                    is_active BOOLEAN DEFAULT 1,
+                    notes TEXT
+                );
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS indicator_values (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    indicator_id INT,
+                    symbol VARCHAR(50),
+                    timestamp DATETIME,
+                    value REAL,
+                    adj_close REAL,
+                    open_val REAL,
+                    high_val REAL,
+                    low_val REAL,
+                    volume INT DEFAULT 0
+                );
+            """))
+            conn.execute(text("INSERT OR IGNORE INTO indicators_catalog (id, name, category, ticker, data_provider) VALUES (1, 'S&P 500', 'INDICES', '^GSPC', 'YFINANCE');"))
+            conn.commit()
 
     def test_valid_ohlc_record(self):
         record = {
@@ -118,10 +168,6 @@ class TestDataIntegrity(unittest.TestCase):
         presa ao primeiro valor.
         """
         res1 = promover_para_producao("^GSPC", "2026-07-30", 7390.45, 7417.36, 7370.98, 7375.80)
-        if res1.get("status") == "error" and ("Can't connect" in str(res1.get("message")) or "timed out" in str(res1.get("message"))):
-            self.skipTest("MySQL inacessível durante a execução do teste unitário em CI/CD.")
-            return
-
         self.assertIn(res1.get("status"), ["inserted", "updated"])
 
         res2 = promover_para_producao("^GSPC", "2026-07-30", 7390.45, 7448.75, 7370.98, 7437.63)

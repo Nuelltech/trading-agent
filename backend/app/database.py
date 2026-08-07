@@ -11,15 +11,23 @@ logger = logging.getLogger(__name__)
 # Create engine with connection pooling to avoid Hostinger's
 # rate limit of ~20 new connections/second on shared hosting.
 # Connections are reused from the pool instead of creating new ones per query.
-engine = create_engine(
-    settings.database_url,
-    pool_pre_ping=True,
-    pool_recycle=1800,
-    pool_size=5,
-    max_overflow=10,
-    connect_args={"connect_timeout": 15},
-    echo=settings.ENVIRONMENT == "development"
-)
+if settings.database_url.startswith("sqlite"):
+    from sqlalchemy.pool import StaticPool
+    engine = create_engine(
+        settings.database_url,
+        connect_args={"check_same_thread": False, "uri": True},
+        poolclass=StaticPool
+    )
+else:
+    engine = create_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+        pool_size=5,
+        max_overflow=10,
+        connect_args={"connect_timeout": 15},
+        echo=settings.ENVIRONMENT == "development"
+    )
 
 
 # Session factory

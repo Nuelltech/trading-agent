@@ -1,6 +1,14 @@
-# backend/app/config.py
+import os
+import sys
 from pydantic_settings import BaseSettings
 from typing import Optional
+
+def is_testing_environment() -> bool:
+    if os.getenv("TESTING") == "1" or os.getenv("USE_SQLITE_TEST_DB") == "1":
+        return True
+    if len(sys.argv) > 0 and ("unittest" in sys.argv[0] or "pytest" in sys.argv[0]):
+        return True
+    return False
 
 class Settings(BaseSettings):
     # Database
@@ -30,6 +38,8 @@ class Settings(BaseSettings):
     
     @property
     def database_url(self) -> str:
+        if is_testing_environment():
+            return "sqlite:///file:testdb?mode=memory&cache=shared"
         return f"mysql+pymysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DATABASE}"
     
     class Config:
