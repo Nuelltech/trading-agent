@@ -194,6 +194,14 @@ def send_digest_email_alert(subject: str, alert_items: list) -> bool:
 
 def send_alert_notification(message: str, subject: Optional[str] = None, send_email: bool = True) -> bool:
     """Envia o alerta para Discord Webhook, Telegram Bot e/ou Email (se configurados)"""
+    try:
+        from app.config import is_testing_environment
+        if is_testing_environment():
+            logging.info(f"🧪 [TESTE SQLITE EM MEMÓRIA] {message}")
+            return True
+    except Exception:
+        pass
+
     logging.info(f"📢 ALERTA ANALÍTICO DISPARADO: {message}")
     sent = False
     
