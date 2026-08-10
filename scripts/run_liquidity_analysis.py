@@ -26,17 +26,33 @@ from app.services.notion_sync_service import publish_liquidity_signal_to_notion
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-WATCHLIST_ANALYSIS = [
-    "BZ=F", "GC=F", "CL=F", "EURUSD=X", "GBPUSD=X", "USDJPY=X", 
-    "^GSPC", "^NDX", "^GDAXI", "DX-Y.NYB", "O", "DAL", "F", "ENPH", "NKE", "STLA"
-]
+def get_watchlist_for_analysis() -> list:
+    """Obtém dinamicamente todos os ativos ativos do indicators_catalog no MySQL com fallback."""
+    try:
+        from app.database import engine
+        with engine.connect() as conn:
+            sql = text("SELECT ticker FROM indicators_catalog WHERE is_active = TRUE")
+            rows = conn.execute(sql).fetchall()
+            if rows:
+                tickers = [r[0] for r in rows if r[0]]
+                logging.info(f"✅ Watchlist do Motor de Liquidez carregada dinamicamente da DB ({len(tickers)} ativos).")
+                return tickers
+    except Exception as e:
+        logging.warning(f"⚠️ Erro ao consultar indicators_catalog na DB ({e}). Usando lista fallback...")
+    
+    return [
+        "BZ=F", "GC=F", "CL=F", "HG=F", "CC=F", "EURUSD=X", "GBPUSD=X", "USDJPY=X", 
+        "^GSPC", "^NDX", "^SOX", "^GDAXI", "DX-Y.NYB", "TLT", "^TNX", "^TYX", "DGS2",
+        "NVDA", "TSM", "ASML", "BABA", "BBVA", "JPM", "MU", "O", "DAL", "F", "ENPH", "NKE", "STLA"
+    ]
 
 def run_liquidity_analysis_pipeline():
     logging.info("🎯 Executando Módulo de Análise de Liquidez e Sweeps (Produção Validada)...")
+    watchlist = get_watchlist_for_analysis()
     alerts_triggered = 0
     recent_email_alerts = []
 
-    for symbol in WATCHLIST_ANALYSIS:
+    for symbol in watchlist:
         try:
             # Buscar histórico de produção validada no MySQL
             try:
