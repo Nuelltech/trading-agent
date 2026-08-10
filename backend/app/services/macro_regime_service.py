@@ -92,20 +92,75 @@ def fetch_vix_history(target_date: str, limit: int = 60) -> List[float]:
         logging.warning(f"Erro ao carregar histórico do VIX: {e}")
     return []
 
-def fetch_today_earnings_count(target_date: str) -> int:
-    """Busca contagem de resultados de empresa de alto impacto no dia."""
+def fetch_today_earnings_text(target_date: str) -> str:
+    """Busca os nomes/tickers das empresas com resultados/earnings de alto impacto na data."""
+    companies = []
     try:
         with engine.connect() as conn:
-            sql = text("""
-                SELECT COUNT(*) FROM economic_calendar
+            # 1. Tabela corporate_earnings_calendar
+            sql1 = text("""
+                SELECT symbol, company_name FROM corporate_earnings_calendar
                 WHERE DATE(event_date) = DATE(:target_date)
-                  AND (category LIKE '%Earnings%' OR category LIKE '%Resultados%' OR event_name LIKE '%Earnings%')
-                  AND impact = 'HIGH'
             """)
-            cnt = conn.execute(sql, {"target_date": target_date}).scalar()
-            return int(cnt or 0)
-    except Exception:
-        return 0
+            rows1 = conn.execute(sql1, {"target_date": target_date}).fetchall()
+            for r in rows1:
+                name = r[1] or r[0]
+                if name and name not in companies:
+                    companies.append(str(name))
+
+            # 2. Tabela economic_calendar (eventos de alto impacto de earnings)
+            sql2 = text("""
+                SELECT event_name FROM economic_calendar
+                WHERE DATE(event_timestamp) = DATE(:target_date)
+                  AND (event_name LIKE '%Earnings%' OR event_name LIKE '%Resultados%')
+                  AND impact_level = 'HIGH'
+            """)
+            rows2 = conn.execute(sql2, {"target_date": target_date}).fetchall()
+            for r in rows2:
+                name = r[0]
+                if name and name not in companies:
+                    companies.append(str(name))
+    except Exception as e:
+        logging.warning(f"Erro ao buscar earnings do dia: {e}")
+
+    if not companies:
+        return "Nenhum"
+    return f"{len(companies)} empresas: " + ", ".join(companies[:5])
+
+def fetch_today_sweeps_text(target_date: str) -> str:
+    """Busca os sweeps de liquidez detetados na data da sessão."""
+    detected_sweeps = []
+    try:
+        from app.services.liquidity_engine import analyze_liquidity_sweeps
+        import pandas as pd
+
+        watchlist = ["BZ=F", "GC=F", "CL=F", "EURUSD=X", "GBPUSD=X", "USDJPY=X", "^GSPC", "^NDX", "NVDA", "TSM", "ASML"]
+        for sym in watchlist:
+            with engine.connect() as conn:
+                df = pd.read_sql(
+                    text("""
+                        SELECT timestamp, open_val as open, high_val as high, low_val as low, value as close, volume 
+                        FROM indicator_values 
+                        WHERE symbol = :sym AND DATE(timestamp) <= DATE(:t_date) 
+                        ORDER BY timestamp ASC
+                    """),
+                    conn,
+                    params={"sym": sym, "t_date": target_date}
+                )
+                if not df.empty and len(df) >= 60:
+                    sweeps = analyze_liquidity_sweeps(sym, df, k_factor=1.5)
+                    for sw in sweeps:
+                        sw_date = str(sw.get("timestamp"))[:10]
+                        if sw_date == target_date and sw.get("status") == "LIQUIDEZ_CONSUMIDA":
+                            lvl = sw.get("level_broken", 0.0)
+                            ev_t = "Topo" if sw.get("event_type") == "SWEEP_TOPO" else "Fundo"
+                            detected_sweeps.append(f"{sym} ({ev_t} ${lvl:.2f})")
+    except Exception as e:
+        logging.warning(f"Erro ao buscar sweeps do dia: {e}")
+
+    if not detected_sweeps:
+        return "Nenhum"
+    return f"{len(detected_sweeps)} sweeps: " + ", ".join(detected_sweeps[:4])
 
 def fetch_camada0_structural_thesis() -> str:
     """Lê a tese estrutural mais recente da Camada 0 no Notion."""
@@ -277,8 +332,9 @@ def run_tarefa1_calculo_mecanico(target_date: Optional[str] = None) -> Tuple[Dic
     else:
         calc["gap_abertura"] = 0.0
 
-    # 7. Earnings Relevantes do Dia
-    calc["earnings_count"] = fetch_today_earnings_count(target_date)
+    # 7. Sweeps e Earnings Relevantes do Dia (Narrativa)
+    calc["sweeps_text"] = fetch_today_sweeps_text(target_date)
+    calc["earnings_text"] = fetch_today_earnings_text(target_date)
 
     has_critical_error = len(errors) > 0
     calc["errors"] = errors
@@ -402,8 +458,11 @@ def write_tarefa1_to_notion(calc: Dict[str, Any]) -> bool:
     # 6. Gap de Abertura (%)
     add_prop("Gap de Abertura (%)", calc.get("gap_abertura", 0.0))
 
-    # 7. Earnings (Respeitando estritamente o tipo no Notion: rich_text ou number)
-    add_prop("Earnings Relevantes Hoje", calc.get("earnings_count", 0))
+    # 7. Sweeps Detetados Hoje (Narrativo)
+    add_prop("Sweeps Detetados Hoje", calc.get("sweeps_text", "Nenhum"))
+
+    # 8. Earnings Relevantes Hoje (Narrativo)
+    add_prop("Earnings Relevantes Hoje", calc.get("earnings_text", "Nenhum"))
 
     # 8. Erros Detetados Neste Ciclo
     errors_list = calc.get("errors", [])
