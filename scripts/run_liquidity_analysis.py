@@ -23,6 +23,7 @@ from app.services.alert_service import (
     check_quarantine_sla_violations
 )
 from app.services.notion_sync_service import publish_liquidity_signal_to_notion
+from app.services.notion_anomalies_sync_service import sync_anomalies_quarantine_to_notion
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -118,6 +119,12 @@ def run_liquidity_analysis_pipeline():
 
     # 3. Monitor de SLA de Quarentena (Alerta de dados em falta > 12h)
     sla_violations = check_quarantine_sla_violations(hours_threshold=12)
+
+    # 4. Sync da Quarentena de Anomalias para o Notion (Database 'Quarentena de Anomalias — Claude')
+    try:
+        sync_anomalies_quarantine_to_notion()
+    except Exception as sync_err:
+        logging.error(f"⚠️ Erro ao sincronizar anomalias para o Notion: {sync_err}")
 
     # 4. REGRA DE AGRUPAMENTO: Disparar EXATAMENTE 1 E-MAIL CONSOLIDADO ao final da execução se houverem alertas
     if recent_email_alerts:

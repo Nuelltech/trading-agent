@@ -48,6 +48,8 @@ jobs:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN || secrets.NOTION_API_KEY }}
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY || secrets.NOTION_TOKEN }}
           NOTION_LIQUIDITY_DATABASE_ID: ${{ secrets.NOTION_LIQUIDITY_DATABASE_ID }}
+          ANOMALIA_DATABASE_ID: ${{ secrets.ANOMALIA_DATABASE_ID }}
+          NOTION_ANOMALIES_DATABASE_ID: ${{ secrets.NOTION_ANOMALIES_DATABASE_ID || secrets.ANOMALIA_DATABASE_ID }}
         run: |
           python scripts/run_liquidity_analysis.py
 
