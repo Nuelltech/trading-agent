@@ -294,16 +294,31 @@ def run_tarefa1_calculo_mecanico(target_date: Optional[str] = None) -> Tuple[Dic
     return calc, has_critical_error
 
 
+def find_matching_schema_prop(schema: Dict[str, str], target_name: str) -> Optional[Tuple[str, str]]:
+    """Procura no schema do Notion por uma propriedade correspondente (exato ou sem acentos/case-insensitive)."""
+    if target_name in schema:
+        return target_name, schema[target_name]
+    
+    clean_target = target_name.lower().replace("ã", "a").replace("ç", "c").replace("ê", "e").replace("é", "e").replace("á", "a").replace("í", "i").replace("ó", "o").replace("ú", "u").replace(" ", "").replace("-", "").replace("_", "")
+    
+    for p_name, p_type in schema.items():
+        clean_p = p_name.lower().replace("ã", "a").replace("ç", "c").replace("ê", "e").replace("é", "e").replace("á", "a").replace("í", "i").replace("ó", "o").replace("ú", "u").replace(" ", "").replace("-", "").replace("_", "")
+        if clean_p == clean_target:
+            return p_name, p_type
+            
+    return None
+
 def write_tarefa1_to_notion(calc: Dict[str, Any]) -> bool:
     """Escreve todos os campos calculados na Tarefa 1 na Database Notion."""
+    entry_date = calc["date"]
+    session_title = f"Sessão {entry_date}"
+    logging.info(f"📤 [TAREFA 1 NOTION] Iniciando persistência de campos no Notion para Sessão [{entry_date}]...")
+
     if not NOTION_TOKEN or not NOTION_CLAUDE_REGIME_DB_ID:
-        logging.error("❌ NOTION_CLAUDE_REGIME_DATABASE_ID não configurado.")
+        logging.error("❌ NOTION_TOKEN ou NOTION_CLAUDE_REGIME_DATABASE_ID não configurados.")
         return False
 
     schema = get_notion_db_schema(NOTION_CLAUDE_REGIME_DB_ID)
-    entry_date = calc["date"]
-    session_title = f"Sessão {entry_date}"
-
     title_col = "Data"
     for p_name, p_type in schema.items():
         if p_type == "title":
@@ -322,13 +337,34 @@ def write_tarefa1_to_notion(calc: Dict[str, Any]) -> bool:
         title_col: {"title": [{"text": {"content": session_title}}]}
     }
 
-    # VIX
-    if "Classificação VIX" in schema:
-        props["Classificação VIX"] = {"select": {"name": calc.get("classificacao_vix", "Sem Dados")}}
-    if "Padrão Intradiário VIX" in schema:
-        props["Padrão Intradiário VIX"] = {"select": {"name": calc.get("padrao_vix", "Estável")}}
+    # Helper interno para popular propriedade no props se encontrada no schema
+    def add_prop(target_name: str, value: Any, force_type: Optional[str] = None):
+        match = find_matching_schema_prop(schema, target_name)
+        if not match:
+            return
+        prop_name, prop_type = match
+        effective_type = force_type or prop_type
 
-    # Sinais 11 Ativos
+        if value is None:
+            return
+
+        if effective_type == "select":
+            props[prop_name] = {"select": {"name": str(value)}}
+        elif effective_type == "number":
+            try:
+                props[prop_name] = {"number": float(value)}
+            except Exception:
+                props[prop_name] = {"rich_text": [{"text": {"content": str(value)}}]}
+        elif effective_type == "checkbox":
+            props[prop_name] = {"checkbox": bool(value)}
+        else:
+            props[prop_name] = {"rich_text": [{"text": {"content": str(value)}}]}
+
+    # 1. VIX
+    add_prop("Classificação VIX", calc.get("classificacao_vix", "Sem Dados"), force_type=schema.get("Classificação VIX") or schema.get("Classificacao VIX"))
+    add_prop("Padrão Intradiário VIX", calc.get("padrao_vix", "Estável"), force_type=schema.get("Padrão Intradiário VIX") or schema.get("Padrao Intradiario VIX"))
+
+    # 2. Sinais dos 11 Ativos
     sinais = calc.get("sinais", {})
     mapping_sinais = {
         "Sinal DXY do Dia": sinais.get("DXY", 0.0),
@@ -345,42 +381,32 @@ def write_tarefa1_to_notion(calc: Dict[str, Any]) -> bool:
     }
 
     for prop_name, val in mapping_sinais.items():
-        if prop_name in schema:
-            p_type = schema[prop_name]
-            if p_type == "number":
-                props[prop_name] = {"number": val}
-            else:
-                props[prop_name] = {"rich_text": [{"text": {"content": str(val)}}]}
+        add_prop(prop_name, val)
 
-    # Divergências
-    if "Divergência Nasdaq-SOX" in schema:
-        props["Divergência Nasdaq-SOX"] = {"select": {"name": calc.get("div_ndx_sox", "Não")}}
-    if "Divergência EUA vs. Europa" in schema:
-        props["Divergência EUA vs. Europa"] = {"select": {"name": calc.get("div_eua_eur", "Não")}}
-    if "Divergência EUA vs. Ásia" in schema:
-        props["Divergência EUA vs. Ásia"] = {"select": {"name": calc.get("div_eua_asia", "Não")}}
+    # 3. Divergências
+    add_prop("Divergência Nasdaq-SOX", calc.get("div_ndx_sox", "Não"))
+    add_prop("Divergência EUA vs. Europa", calc.get("div_eua_eur", "Não"))
+    add_prop("Divergência EUA vs. Ásia", calc.get("div_eua_asia", "Não"))
 
-    # Rácio Cobre/Ouro
-    if "Rácio Cobre/Ouro" in schema and calc.get("racio_cobre_ouro") is not None:
-        props["Rácio Cobre/Ouro"] = {"number": calc["racio_cobre_ouro"]}
+    # 4. Rácio Cobre/Ouro (Número)
+    if calc.get("racio_cobre_ouro") is not None:
+        add_prop("Rácio Cobre/Ouro", calc["racio_cobre_ouro"], force_type="number")
 
-    # Yield Real Proxy
-    if "Leitura Yield Real (Proxy)" in schema:
-        props["Leitura Yield Real (Proxy)"] = {"rich_text": [{"text": {"content": calc.get("yield_real_proxy", "Coerente")}}]}
+    # 5. Yield Real Proxy
+    add_prop("Leitura Yield Real (Proxy)", calc.get("yield_real_proxy", "Coerente"))
 
-    # Gap Abertura
-    if "Gap de Abertura (%)" in schema:
-        props["Gap de Abertura (%)"] = {"number": calc.get("gap_abertura", 0.0)}
+    # 6. Gap de Abertura (%)
+    add_prop("Gap de Abertura (%)", calc.get("gap_abertura", 0.0), force_type="number")
 
-    # Earnings
-    if "Earnings Relevantes Hoje" in schema:
-        props["Earnings Relevantes Hoje"] = {"number": calc.get("earnings_count", 0)}
+    # 7. Earnings
+    add_prop("Earnings Relevantes Hoje", calc.get("earnings_count", 0), force_type="number")
 
-    # Erros Detetados Neste Ciclo (Fonte principal de auditoria de erros)
+    # 8. Erros Detetados Neste Ciclo
     errors_list = calc.get("errors", [])
-    if "Erros Detetados Neste Ciclo" in schema:
-        err_msg = " | ".join(errors_list) if errors_list else "Nenhum erro detetado."
-        props["Erros Detetados Neste Ciclo"] = {"rich_text": [{"text": {"content": err_msg}}]}
+    err_msg = " | ".join(errors_list) if errors_list else "Nenhum erro detetado."
+    add_prop("Erros Detetados Neste Ciclo", err_msg)
+
+    logging.info(f"📤 [TAREFA 1 NOTION] {len(props)} propriedades prontas para envio ao Notion.")
 
     try:
         res = requests.post(url_query, headers=NOTION_HEADERS, json=query_payload, timeout=10)
@@ -391,8 +417,10 @@ def write_tarefa1_to_notion(calc: Dict[str, Any]) -> bool:
             url_patch = f"https://api.notion.com/v1/pages/{page_id}"
             patch_res = requests.patch(url_patch, headers=NOTION_HEADERS, json={"properties": props}, timeout=10)
             if patch_res.status_code in [200, 201]:
-                logging.info(f"✅ [TAREFA 1 NOTION] Sessão [{entry_date}] atualizada no Notion com sucesso.")
+                logging.info(f"✅ [TAREFA 1 NOTION] Sessão [{entry_date}] atualizada no Notion com sucesso ({len(props)} campos gravados).")
                 return True
+            else:
+                logging.error(f"❌ [TAREFA 1 NOTION] Erro no PATCH da Sessão [{entry_date}] (HTTP {patch_res.status_code}): {patch_res.text}")
         else:
             post_payload = {
                 "parent": {"database_id": NOTION_CLAUDE_REGIME_DB_ID},
@@ -401,10 +429,12 @@ def write_tarefa1_to_notion(calc: Dict[str, Any]) -> bool:
             url_post = "https://api.notion.com/v1/pages"
             post_res = requests.post(url_post, headers=NOTION_HEADERS, json=post_payload, timeout=10)
             if post_res.status_code in [200, 201]:
-                logging.info(f"✅ [TAREFA 1 NOTION] Linha criada no Notion para Sessão [{entry_date}].")
+                logging.info(f"✅ [TAREFA 1 NOTION] Linha criada no Notion para Sessão [{entry_date}] com sucesso ({len(props)} campos gravados).")
                 return True
+            else:
+                logging.error(f"❌ [TAREFA 1 NOTION] Erro no POST da Sessão [{entry_date}] (HTTP {post_res.status_code}): {post_res.text}")
     except Exception as e:
-        logging.error(f"❌ Erro ao escrever Tarefa 1 no Notion: {e}")
+        logging.error(f"❌ Exceção ao escrever Tarefa 1 no Notion: {e}")
 
     return False
 
