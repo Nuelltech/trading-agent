@@ -23,11 +23,28 @@ from app.services.macro_regime_service import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def main():
-    today_date = datetime.utcnow().strftime("%Y-%m-%d")
-    logging.info(f"🚀 Iniciando Agente Automatizado da Camada 1 (Regime Macro Diário) - Sessão {today_date}")
+    target_date = sys.argv[1].strip() if len(sys.argv) > 1 and sys.argv[1].strip() else None
+    
+    if not target_date:
+        # Se nenhuma data for fornecida, verificar se o MySQL já tem dados de hoje ou se usamos a última sessão completa disponível
+        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        try:
+            from app.database import engine
+            from sqlalchemy import text
+            with engine.connect() as conn:
+                res = conn.execute(text("SELECT MAX(DATE(timestamp)) FROM indicator_values")).scalar()
+                if res:
+                    db_max_date = str(res)[:10]
+                    target_date = db_max_date
+                else:
+                    target_date = today_str
+        except Exception:
+            target_date = today_str
+
+    logging.info(f"🚀 Iniciando Agente Automatizado da Camada 1 (Regime Macro Diário) - Sessão {target_date}")
 
     # 1. Executar Tarefa 1
-    calc_data, has_critical_error = run_tarefa1_calculo_mecanico(today_date)
+    calc_data, has_critical_error = run_tarefa1_calculo_mecanico(target_date)
 
     # 2. Executar Tarefa 2 (Apenas se Tarefa 1 correu sem erro crítico de dados de origem)
     if not has_critical_error:

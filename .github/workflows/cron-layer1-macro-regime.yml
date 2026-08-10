@@ -4,7 +4,12 @@ on:
   schedule:
     # Executa diariamente às 22h00 UTC (23h00 Lisboa) de segunda a sexta-feira (pós-fecho EUA)
     - cron: '0 22 * * 1-5'
-  workflow_dispatch: # Permite execução manual no GitHub Actions para testes
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: 'Data da Sessão a processar (formato YYYY-MM-DD, ex: 2026-08-07)'
+        required: false
+        default: ''
 
 jobs:
   run-macro-regime-layer1:
@@ -40,4 +45,4 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.ANTHROPIC_API_KEY_TRADING }}
           CLAUDE_MODEL: 'claude-3-5-haiku-20241022'
         run: |
-          python scripts/run_macro_regime_layer1.py
+          python scripts/run_macro_regime_layer1.py "${{ github.event.inputs.target_date }}"
