@@ -284,12 +284,16 @@ def run_tarefa1_calculo_mecanico(target_date: Optional[str] = None) -> Tuple[Dic
     calc["errors"] = errors
 
     # 8. Escrever no Notion (Database #4: Resumo Diário — Regime de Risco — Claude)
-    write_tarefa1_to_notion(calc)
+    write_success = write_tarefa1_to_notion(calc)
+    if not write_success:
+        errors.append("Falha na persistência HTTP da Tarefa 1 no Notion.")
+        calc["errors"] = errors
+        has_critical_error = True
 
     if has_critical_error:
-        logging.warning(f"⚠️ [TAREFA 1] Concluída com {len(errors)} alertas/dados em falta. A Tarefa 2 será CANCELADA.")
+        logging.error(f"❌ [TAREFA 1 FALHOU] Concluída com {len(errors)} erros de dados/escrita no Notion. A Tarefa 2 será CANCELADA.")
     else:
-        logging.info("✅ [TAREFA 1] Concluída com 100% de sucesso mecânico.")
+        logging.info("✅ [TAREFA 1] Concluída com 100% de sucesso mecânico e persistência confirmada no Notion.")
 
     return calc, has_critical_error
 
@@ -337,32 +341,32 @@ def write_tarefa1_to_notion(calc: Dict[str, Any]) -> bool:
         title_col: {"title": [{"text": {"content": session_title}}]}
     }
 
-    # Helper interno para popular propriedade no props se encontrada no schema
-    def add_prop(target_name: str, value: Any, force_type: Optional[str] = None):
+    # Helper interno para popular propriedade no props respeitando estritamente o schema retornado pelo Notion
+    def add_prop(target_name: str, value: Any):
         match = find_matching_schema_prop(schema, target_name)
         if not match:
             return
         prop_name, prop_type = match
-        effective_type = force_type or prop_type
 
         if value is None:
             return
 
-        if effective_type == "select":
+        if prop_type == "select":
             props[prop_name] = {"select": {"name": str(value)}}
-        elif effective_type == "number":
+        elif prop_type == "number":
             try:
                 props[prop_name] = {"number": float(value)}
             except Exception:
                 props[prop_name] = {"rich_text": [{"text": {"content": str(value)}}]}
-        elif effective_type == "checkbox":
+        elif prop_type == "checkbox":
             props[prop_name] = {"checkbox": bool(value)}
         else:
+            # rich_text
             props[prop_name] = {"rich_text": [{"text": {"content": str(value)}}]}
 
     # 1. VIX
-    add_prop("Classificação VIX", calc.get("classificacao_vix", "Sem Dados"), force_type=schema.get("Classificação VIX") or schema.get("Classificacao VIX"))
-    add_prop("Padrão Intradiário VIX", calc.get("padrao_vix", "Estável"), force_type=schema.get("Padrão Intradiário VIX") or schema.get("Padrao Intradiario VIX"))
+    add_prop("Classificação VIX", calc.get("classificacao_vix", "Sem Dados"))
+    add_prop("Padrão Intradiário VIX", calc.get("padrao_vix", "Estável"))
 
     # 2. Sinais dos 11 Ativos
     sinais = calc.get("sinais", {})
@@ -388,18 +392,18 @@ def write_tarefa1_to_notion(calc: Dict[str, Any]) -> bool:
     add_prop("Divergência EUA vs. Europa", calc.get("div_eua_eur", "Não"))
     add_prop("Divergência EUA vs. Ásia", calc.get("div_eua_asia", "Não"))
 
-    # 4. Rácio Cobre/Ouro (Número)
+    # 4. Rácio Cobre/Ouro
     if calc.get("racio_cobre_ouro") is not None:
-        add_prop("Rácio Cobre/Ouro", calc["racio_cobre_ouro"], force_type="number")
+        add_prop("Rácio Cobre/Ouro", calc["racio_cobre_ouro"])
 
     # 5. Yield Real Proxy
     add_prop("Leitura Yield Real (Proxy)", calc.get("yield_real_proxy", "Coerente"))
 
     # 6. Gap de Abertura (%)
-    add_prop("Gap de Abertura (%)", calc.get("gap_abertura", 0.0), force_type="number")
+    add_prop("Gap de Abertura (%)", calc.get("gap_abertura", 0.0))
 
-    # 7. Earnings
-    add_prop("Earnings Relevantes Hoje", calc.get("earnings_count", 0), force_type="number")
+    # 7. Earnings (Respeitando estritamente o tipo no Notion: rich_text ou number)
+    add_prop("Earnings Relevantes Hoje", calc.get("earnings_count", 0))
 
     # 8. Erros Detetados Neste Ciclo
     errors_list = calc.get("errors", [])
