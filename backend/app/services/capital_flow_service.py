@@ -266,8 +266,9 @@ def run_tarefa1_calculo_mecanico(target_date: str, window_sessions: int = 11) ->
     calc["secundario_automatico"] = sec_automático
     calc["secundario_gatilhos"] = sec_gatilhos
 
-    # Ordenar variações descendentes do universo primário
-    sorted_assets = sorted(primary_variations.items(), key=lambda x: x[1], reverse=True)
+    # 5. Ordenar variações descendentes do universo primário (Excluindo ^VIX do ranking de rotação de capital)
+    ranking_assets = {k: v for k, v in primary_variations.items() if k != "^VIX"}
+    sorted_assets = sorted(ranking_assets.items(), key=lambda x: x[1], reverse=True)
     
     top3_lideres = sorted_assets[:3] if len(sorted_assets) >= 3 else sorted_assets
     top3_laggards = sorted_assets[-3:] if len(sorted_assets) >= 3 else []
@@ -387,7 +388,7 @@ def run_tarefa1_calculo_mecanico(target_date: str, window_sessions: int = 11) ->
 def write_tarefa1_to_notion(calc: Dict[str, Any]) -> bool:
     """Escreve os campos calculados na Tarefa 1 na Database Notion da Camada 2."""
     entry_date = calc["date"]
-    session_title = f"Data de Avaliação {entry_date}"
+    session_title = entry_date
     logging.info(f"📤 [CAMADA 2 - TAREFA 1 NOTION] Iniciando persistência de campos no Notion para Sessão [{entry_date}]...")
 
     if not NOTION_TOKEN or not NOTION_CAMADA2_DB_ID:
