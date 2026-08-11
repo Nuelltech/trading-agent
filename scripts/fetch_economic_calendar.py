@@ -244,8 +244,15 @@ def save_economic_events(records):
                     saved += 1
                 trans.commit()
                 from app.services.data_validator import auto_resolve_anomalies
+                from app.services.catalysts_service import validar_previsao_pos_evento
                 for r in valid_records:
                     auto_resolve_anomalies("economic_calendar", r["event_name"])
+                    if r.get("actual_val") is not None:
+                        try:
+                            validar_previsao_pos_evento(r)
+                        except Exception as val_err:
+                            logging.warning(f"⚠️ Erro na validação retrospetiva para {r.get('event_name')}: {val_err}")
+
                 logging.info(f"🎉 {saved} eventos validados e salvos na tabela 'economic_calendar'!")
                 return
         except Exception as e:
