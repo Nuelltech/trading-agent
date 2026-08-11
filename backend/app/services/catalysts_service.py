@@ -148,45 +148,51 @@ def get_catalyst_candidates() -> List[Dict[str, Any]]:
     """
     Identifica eventos de Alto Impacto nos próximos 14 dias que necessitam de análise de catalisadores.
     Retorna lista de dicionários com dados do evento e page_id do Mapa correspondente.
+    Inclui retentativas em caso de instabilidade de rede MySQL.
     """
     mapas_ids = load_mapas_transmissao_ids()
     candidates = []
 
-    try:
-        with engine.connect() as conn:
-            sql = text("""
-                SELECT id, event_name, country, currency, event_timestamp, impact_level, actual_val, forecast_val, previous_val, unit
-                FROM economic_calendar
-                WHERE impact_level = 'HIGH'
-                  AND event_timestamp BETWEEN NOW() AND NOW() + INTERVAL 14 DAY
-                ORDER BY event_timestamp ASC
-            """)
-            rows = conn.execute(sql).fetchall()
+    for attempt in range(1, 4):
+        try:
+            with engine.connect() as conn:
+                sql = text("""
+                    SELECT id, event_name, country, currency, event_timestamp, impact_level, actual_val, forecast_val, previous_val, unit
+                    FROM economic_calendar
+                    WHERE impact_level = 'HIGH'
+                      AND event_timestamp BETWEEN NOW() AND NOW() + INTERVAL 14 DAY
+                    ORDER BY event_timestamp ASC
+                """)
+                rows = conn.execute(sql).fetchall()
 
-            for r in rows:
-                event_dict = dict(r._mapping)
-                event_name = str(event_dict.get("event_name", "")).strip()
+                for r in rows:
+                    event_dict = dict(r._mapping)
+                    event_name = str(event_dict.get("event_name", "")).strip()
 
-                # REGRA EXPLICITA: Se o nome não corresponder exatamente, ignorar
-                map_name = EVENTO_PARA_MAPA.get(event_name)
-                if not map_name:
-                    logging.info(f"⏭️ [TAREFA 1] Evento '{event_name}' não consta da tabela estrita EVENTO_PARA_MAPA. Ignorando.")
-                    continue
+                    # REGRA EXPLICITA: Se o nome não corresponder exatamente, ignorar
+                    map_name = EVENTO_PARA_MAPA.get(event_name)
+                    if not map_name:
+                        logging.info(f"⏭️ [TAREFA 1] Evento '{event_name}' não consta da tabela estrita EVENTO_PARA_MAPA. Ignorando.")
+                        continue
 
-                page_id = mapas_ids.get(map_name)
-                if not page_id:
-                    logging.warning(f"⚠️ [TAREFA 1] Page ID do Mapa '{map_name}' não encontrado no secret NOTION_MAPAS_TRANSMISSAO_IDS para '{event_name}'.")
-                    continue
+                    page_id = mapas_ids.get(map_name)
+                    if not page_id:
+                        logging.warning(f"⚠️ [TAREFA 1] Page ID do Mapa '{map_name}' não encontrado no secret NOTION_MAPAS_TRANSMISSAO_IDS para '{event_name}'.")
+                        continue
 
-                event_dict["map_name"] = map_name
-                event_dict["map_page_id"] = page_id
-                candidates.append(event_dict)
+                    event_dict["map_name"] = map_name
+                    event_dict["map_page_id"] = page_id
+                    candidates.append(event_dict)
 
-            logging.info(f"📋 [TAREFA 1] {len(candidates)} eventos de alto impacto qualificados para análise de catalisadores nos próximos 14 dias.")
-            return candidates
-    except Exception as e:
-        logging.error(f"❌ Erro ao buscar candidatos a catalisadores na DB: {e}")
-        return []
+                logging.info(f"📋 [TAREFA 1] {len(candidates)} eventos de alto impacto qualificados para análise de catalisadores nos próximos 14 dias.")
+                return candidates
+        except Exception as e:
+            logging.warning(f"⚠️ [TAREFA 1] Tentativa {attempt}/3 falhou ao ligar à DB ({e}). A tentar novamente em 3s...")
+            import time
+            time.sleep(3)
+
+    logging.error("❌ Falha permanente ao buscar candidatos a catalisadores na DB após 3 tentativas.")
+    return []
 
 
 # -----------------------------------------------------------------------------
