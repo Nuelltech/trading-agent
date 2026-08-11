@@ -288,7 +288,103 @@ def save_corporate_earnings(records):
             time.sleep(3)
     logging.error("❌ Falha permanente ao salvar earnings após 3 tentativas.")
 
+def check_phase1_high_impact_today() -> bool:
+    """
+    FASE 1: Verifica no MySQL se o dia de hoje tem pelo menos 1 evento com Importância = 'HIGH' 
+    ou 1 earnings de ação ativa do catálogo.
+    Se não houver nada agendado para hoje, regressa False (< 0.1s).
+    """
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    active_stocks = get_active_stock_tickers()
+    stock_list = list(active_stocks.keys())
+    
+    try:
+        with engine.connect() as conn:
+            # Check 1: Eventos Macro de Alto Impacto hoje
+            q1 = text("""
+                SELECT COUNT(*) FROM economic_calendar 
+                WHERE impact_level = 'HIGH' 
+                  AND DATE(event_timestamp) = :today
+            """)
+            c1 = conn.execute(q1, {"today": today_str}).scalar() or 0
+            if c1 > 0:
+                return True
+                
+            # Check 2: Earnings de Ações Ativas hoje
+            if stock_list:
+                q2 = text("""
+                    SELECT COUNT(*) FROM corporate_earnings_calendar
+                    WHERE symbol IN :stocks
+                      AND DATE(event_date) = :today
+                """)
+                c2 = conn.execute(q2, {"today": today_str, "stocks": tuple(stock_list)}).scalar() or 0
+                if c2 > 0:
+                    return True
+    except Exception as e:
+        logging.warning(f"⚠️ Falha no check de Fase 1 ({e}). A assumir True por segurança.")
+        return True
+        
+    return False
+
+def check_phase2_pending_event_in_window() -> bool:
+    """
+    FASE 2: Verifica se existe algum evento 'HIGH' (ou earnings ativo) hoje 
+    cujo resultado (actual_val / eps_actual) continue NULL.
+    Se tudo já estiver preenchido, regressa False (< 0.2s).
+    """
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    active_stocks = get_active_stock_tickers()
+    stock_list = list(active_stocks.keys())
+
+    try:
+        with engine.connect() as conn:
+            # Macro pendente hoje
+            q1 = text("""
+                SELECT COUNT(*) FROM economic_calendar 
+                WHERE impact_level = 'HIGH' 
+                  AND DATE(event_timestamp) = :today
+                  AND actual_val IS NULL
+            """)
+            c1 = conn.execute(q1, {"today": today_str}).scalar() or 0
+            if c1 > 0:
+                return True
+
+            # Earnings pendente hoje
+            if stock_list:
+                q2 = text("""
+                    SELECT COUNT(*) FROM corporate_earnings_calendar
+                    WHERE symbol IN :stocks
+                      AND DATE(event_date) = :today
+                      AND eps_actual IS NULL
+                """)
+                c2 = conn.execute(q2, {"today": today_str, "stocks": tuple(stock_list)}).scalar() or 0
+                if c2 > 0:
+                    return True
+    except Exception as e:
+        logging.warning(f"⚠️ Falha no check de Fase 2 ({e}). A assumir True por segurança.")
+        return True
+
+    return False
+
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Ingestão do Calendário Económico")
+    parser.add_argument("--mode", choices=["full", "windowed"], default="full", help="Modo de execução: 'full' (diário completo) ou 'windowed' (micro-polling event-driven)")
+    args = parser.parse_args()
+
+    if args.mode == "windowed":
+        # FASE 1: Verificação Diária
+        if not check_phase1_high_impact_today():
+            logging.info("ℹ️ [FASE 1 - DIA SEM EVENTOS] Nenhum evento de Alto Impacto ou Earnings de ações ativas hoje. Finalizando (< 0.1s).")
+            sys.exit(0)
+
+        # FASE 2: Early Exit em Janela Pendente
+        if not check_phase2_pending_event_in_window():
+            logging.info("ℹ️ [FASE 2 - EARLY EXIT] Todos os eventos de Alto Impacto de hoje já possuem resultado. Finalizando (< 0.2s).")
+            sys.exit(0)
+
+        logging.info("⚡ [EVENT-DRIVEN ACTIVATION] Evento pendente em janela ativa detetado! Executando recolha e atualização...")
+
     try:
         eco_records = fetch_economic_calendar_fmp()
         save_economic_events(eco_records)

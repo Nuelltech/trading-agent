@@ -149,16 +149,26 @@ class TestUpsertEconomicEvent(unittest.TestCase):
     @patch("app.services.notion_calendar_sync_service._notion_find_existing_page", return_value="existing-page-id")
     @patch("app.services.notion_calendar_sync_service._notion_update_page", return_value=True)
     def test_updates_real_and_date_fields_when_exists(self, mock_update, mock_find):
-        result = upsert_economic_event(self._make_eco_row(actual_val=3.75))
+        result = upsert_economic_event(self._make_eco_row(actual_val=3.75, previous_val=3.5))
         self.assertEqual(result, "updated")
 
-        # "Real" e "Data" com hora ISO 8601 devem ser atualizados no PATCH
+        # "Real", "Data" e "Anterior" devem ser atualizados no PATCH
         updated_props = mock_update.call_args[0][1]
         self.assertIn("Real", updated_props)
         self.assertIn("Data", updated_props)
+        self.assertIn("Anterior", updated_props)
         self.assertNotIn("Evento", updated_props)
         self.assertNotIn("Tipo", updated_props)
         self.assertNotIn("Impacto nos Nossos Ativos", updated_props)
+
+    @patch("app.services.notion_calendar_sync_service._notion_find_existing_page", return_value=None)
+    @patch("app.services.notion_calendar_sync_service._notion_create_page", return_value=True)
+    def test_creates_new_page_with_anterior_field(self, mock_create, mock_find):
+        result = upsert_economic_event(self._make_eco_row(previous_val=3.5))
+        self.assertEqual(result, "created")
+        created_props = mock_create.call_args[0][0]
+        self.assertIn("Anterior", created_props)
+        self.assertEqual(created_props["Anterior"]["rich_text"][0]["text"]["content"], "3.50 %")
 
 
 class TestUpsertEarningsEvent(unittest.TestCase):

@@ -329,6 +329,11 @@ def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]
         p_name, _ = real_prop
         update_props[p_name] = {"rich_text": _build_rich_text(real_text)}
 
+    previous_val = row.get("previous_val")
+    previous_text = _format_value(previous_val, row.get("unit", ""))
+    if previous_val is not None:
+        update_props["Anterior"] = {"rich_text": _build_rich_text(previous_text)}
+
     logging.info(f"⏰ [NOTION CALENDAR HORA] [{row.get('event_name')}] -> Data/Hora enviada ao Notion: '{date_str}' (Hora: '{time_text or 'N/A'}')")
 
     if existing_page_id:
@@ -353,6 +358,9 @@ def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]
     if date_str:
         full_props["Data"] = {"date": {"start": date_str}}
 
+    if previous_text:
+        full_props["Anterior"] = {"rich_text": _build_rich_text(previous_text)}
+
     forecast_val = row.get("forecast_val")
     forecast_text = _format_value(forecast_val, row.get("unit", ""))
     if forecast_val is not None and forecast_prop:
@@ -375,6 +383,67 @@ def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]
     return "created" if success else "error"
 
 
+def calculate_earnings_trends(symbol: str, current_event_date: Any, current_period: str) -> Dict[str, Any]:
+    """
+    Calcula os 4 campos de tendência para earnings a partir do histórico no MySQL:
+    - EPS Trimestre Anterior (QoQ)
+    - EPS Mesmo Trimestre Ano Anterior (YoY)
+    - Receita Trimestre Anterior (QoQ)
+    - Receita Mesmo Trimestre Ano Anterior (YoY)
+    """
+    trends = {
+        "eps_qoq": None,
+        "eps_yoy": None,
+        "revenue_qoq": None,
+        "revenue_yoy": None
+    }
+    if not symbol:
+        return trends
+
+    try:
+        from app.database import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            query = text("""
+                SELECT fiscal_period, event_date, eps_actual, revenue_actual
+                FROM corporate_earnings_calendar
+                WHERE symbol = :symbol
+                  AND (eps_actual IS NOT NULL OR revenue_actual IS NOT NULL)
+                ORDER BY event_date DESC
+            """)
+            rows = conn.execute(query, {"symbol": symbol}).fetchall()
+            if not rows:
+                return trends
+
+            curr_date_str = str(current_event_date)[:10] if current_event_date else ""
+            past_rows = [r for r in rows if str(r.event_date)[:10] < curr_date_str] if curr_date_str else rows
+
+            # 1. QoQ: registo imediatamente anterior
+            if past_rows:
+                prev_row = past_rows[0]
+                trends["eps_qoq"] = float(prev_row.eps_actual) if prev_row.eps_actual is not None else None
+                trends["revenue_qoq"] = float(prev_row.revenue_actual) if prev_row.revenue_actual is not None else None
+
+            # 2. YoY: registo do mesmo trimestre no ano anterior (~365 dias atrás)
+            if curr_date_str:
+                try:
+                    curr_dt = datetime.strptime(curr_date_str, "%Y-%m-%d")
+                    target_yoy_year = curr_dt.year - 1
+                    for r in past_rows:
+                        r_dt = str(r.event_date)[:10]
+                        if r_dt.startswith(str(target_yoy_year)):
+                            trends["eps_yoy"] = float(r.eps_actual) if r.eps_actual is not None else None
+                            trends["revenue_yoy"] = float(r.revenue_actual) if r.revenue_actual is not None else None
+                            break
+                except Exception:
+                    pass
+
+    except Exception as e:
+        logging.warning(f"⚠️ Falha ao calcular tendências de earnings para {symbol}: {e}")
+
+    return trends
+
+
 def upsert_earnings_event(row: Dict[str, Any]) -> str:
     """
     Upsert de um earnings corporativo (corporate_earnings_calendar) no Notion.
@@ -382,15 +451,28 @@ def upsert_earnings_event(row: Dict[str, Any]) -> str:
     """
     mysql_id = row["id"]
     tabela_origem = "corporate_earnings_calendar"
+    symbol = str(row.get("symbol") or "")
 
     existing_page_id = _notion_find_existing_page(mysql_id, tabela_origem)
 
-    # Campos "Real" (só actualizados, nunca na criação se forem None)
+    # Calcular tendências históricas QoQ / YoY
+    trends = calculate_earnings_trends(symbol, row.get("event_date"), str(row.get("fiscal_period") or ""))
+
+    # Campos "Real" + Tendências
     update_props = {}
     if row.get("eps_actual") is not None:
         update_props["EPS Real"] = {"number": float(row["eps_actual"])}
     if row.get("revenue_actual") is not None:
         update_props["Receita Real"] = {"number": float(row["revenue_actual"])}
+
+    if trends["eps_qoq"] is not None:
+        update_props["EPS Trimestre Anterior (QoQ)"] = {"number": trends["eps_qoq"]}
+    if trends["eps_yoy"] is not None:
+        update_props["EPS Mesmo Trimestre Ano Anterior (YoY)"] = {"number": trends["eps_yoy"]}
+    if trends["revenue_qoq"] is not None:
+        update_props["Receita Trimestre Anterior (QoQ)"] = {"number": trends["revenue_qoq"]}
+    if trends["revenue_yoy"] is not None:
+        update_props["Receita Mesmo Trimestre Ano Anterior (YoY)"] = {"number": trends["revenue_yoy"]}
 
     if existing_page_id:
         if update_props:
@@ -399,7 +481,7 @@ def upsert_earnings_event(row: Dict[str, Any]) -> str:
         return "skipped"
 
     # Criar nova página completa
-    company = str(row.get("company_name") or row.get("symbol") or "")
+    company = str(row.get("company_name") or symbol)
     period = str(row.get("fiscal_period") or "")
     evento_title = f"{company} {period}".strip() if period else company
 
@@ -418,8 +500,8 @@ def upsert_earnings_event(row: Dict[str, Any]) -> str:
         "Fonte de Registo": {"select": {"name": "Automático (Cron)"}},
         "Tipo": {"select": {"name": "Resultados Empresa"}},
         "Importância": {"select": {"name": IMPACT_MAP.get(str(row.get("impact_level", "")).upper(), "Alta")}},
-        "País/Empresa": {"rich_text": _build_rich_text(str(row.get("symbol") or ""))},
-        "Ativo Relacionado": {"rich_text": _build_rich_text(str(row.get("symbol") or ""))},
+        "País/Empresa": {"rich_text": _build_rich_text(symbol)},
+        "Ativo Relacionado": {"rich_text": _build_rich_text(symbol)},
         "Momento": {"select": {"name": momento}},
     }
 
@@ -434,6 +516,9 @@ def upsert_earnings_event(row: Dict[str, Any]) -> str:
         full_props["Receita Estimada"] = {"number": float(row["revenue_estimate"])}
     if row.get("revenue_actual") is not None:
         full_props["Receita Real"] = {"number": float(row["revenue_actual"])}
+
+    if update_props:
+        full_props.update(update_props)
 
     success = _notion_create_page(full_props)
     return "created" if success else "error"
