@@ -36,9 +36,9 @@ jobs:
           MYSQL_PORT: ${{ secrets.MYSQL_PORT || '3306' }}
           MYSQL_USER: ${{ secrets.MYSQL_USER }}
           MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
-          MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN || secrets.NOTION_API_KEY }}
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY || secrets.NOTION_TOKEN }}
+          NOTION_CONFIG_DB_ID: ${{ secrets.NOTION_CONFIG_DB_ID || 'fb3a2102-c785-46c9-b2b4-5adecd9d5482' }}
           NOTION_CAMADA2_DB_ID: ${{ secrets.NOTION_CAMADA2_DB_ID || secrets.NOTION_FLUXO_CAPITAL_DATABASE_ID }}
           NOTION_CAMADA0_DB_ID: ${{ secrets.NOTION_CAMADA0_DB_ID || 'cc9794eb-da24-4c9a-8116-ba859efa65aa' }}
           NOTION_CLAUDE_REGIME_DATABASE_ID: ${{ secrets.NOTION_CLAUDE_REGIME_DATABASE_ID || secrets.NOTION_PAINEL_MERCADO_DATABASE_ID }}
