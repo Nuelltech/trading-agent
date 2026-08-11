@@ -18,7 +18,7 @@ import os
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 import requests
 from sqlalchemy import text
