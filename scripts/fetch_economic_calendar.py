@@ -120,9 +120,30 @@ def fetch_economic_calendar_fmp():
         
     return records
 
+def get_active_stock_tickers():
+    """Lê dinamicamente da BD indicators_catalog todas as ações ativas (category = 'STOCKS')."""
+    try:
+        with engine.connect() as conn:
+            query = text("SELECT ticker, name FROM indicators_catalog WHERE is_active = TRUE AND category = 'STOCKS'")
+            res = conn.execute(query).fetchall()
+            if res:
+                return {row[0]: row[1] for row in res}
+    except Exception as e:
+        logging.warning(f"⚠️ Falha ao ler ações ativas do indicators_catalog ({e}). A usar catálogo base.")
+    
+    return {
+        "O": "Realty Income Corporation", 
+        "DAL": "Delta Air Lines Inc", 
+        "F": "Ford Motor Company", 
+        "ENPH": "Enphase Energy Inc", 
+        "NKE": "Nike Inc", 
+        "STLA": "Stellantis NV"
+    }
+
 def fetch_corporate_earnings_fmp():
-    """Busca o Calendário de Earnings Corporativos"""
-    logging.info("🏢 Buscando Calendário de Earnings Corporativos...")
+    """Busca o Calendário de Earnings Corporativos filtrado dinamicamente pelas ações ativas do catálogo"""
+    active_stocks = get_active_stock_tickers()
+    logging.info(f"🏢 [EARNINGS DINÂMICO] Vigilância de Earnings para {len(active_stocks)} ações ativas do indicators_catalog: {list(active_stocks.keys())}")
     records = []
     
     today = datetime.utcnow().date()
@@ -139,13 +160,13 @@ def fetch_corporate_earnings_fmp():
                 if isinstance(data, list):
                     for item in data:
                         symbol = item.get("symbol")
-                        if symbol:
+                        if symbol and symbol in active_stocks:
                             time_raw = str(item.get("time", "")).lower()
                             time_of_day = "BEFORE_MARKET" if "bmo" in time_raw else ("AFTER_MARKET" if "amc" in time_raw else "UNKNOWN")
                             
                             records.append({
                                 "symbol": symbol,
-                                "company_name": item.get("name", symbol),
+                                "company_name": item.get("name") or active_stocks.get(symbol, symbol),
                                 "event_date": item.get("date"),
                                 "time_of_day": time_of_day,
                                 "eps_estimate": item.get("epsEstimated"),
@@ -159,8 +180,8 @@ def fetch_corporate_earnings_fmp():
             logging.error(f"Erro ao buscar Earnings FMP: {e}")
             
     if not records:
-        logging.info("Carregando o Calendário Oficial de Earnings das Ações de Inventário (O, DAL, F, ENPH, NKE, STLA)...")
-        records = [
+        logging.info("Carregando o Calendário Oficial de Earnings filtrado dinamicamente pelas ações vigiadas...")
+        all_official_earnings = [
             {"symbol": "O", "company_name": "Realty Income Corporation", "event_date": "2026-08-04", "time_of_day": "AFTER_MARKET", "eps_estimate": 1.05, "eps_actual": None, "revenue_estimate": 1250000000.00, "revenue_actual": None, "fiscal_period": "Q2 2026", "source_provider": "SEC_EDGAR_OFFICIAL"},
             {"symbol": "DAL", "company_name": "Delta Air Lines Inc", "event_date": "2026-07-11", "time_of_day": "BEFORE_MARKET", "eps_estimate": 2.36, "eps_actual": 2.36, "revenue_estimate": 15400000000.00, "revenue_actual": 15450000000.00, "fiscal_period": "Q2 2026", "source_provider": "SEC_EDGAR_OFFICIAL"},
             {"symbol": "F", "company_name": "Ford Motor Company", "event_date": "2026-07-30", "time_of_day": "AFTER_MARKET", "eps_estimate": 0.68, "eps_actual": None, "revenue_estimate": 43500000000.00, "revenue_actual": None, "fiscal_period": "Q2 2026", "source_provider": "SEC_EDGAR_OFFICIAL"},
@@ -168,6 +189,7 @@ def fetch_corporate_earnings_fmp():
             {"symbol": "NKE", "company_name": "Nike Inc", "event_date": "2026-09-24", "time_of_day": "AFTER_MARKET", "eps_estimate": 0.84, "eps_actual": None, "revenue_estimate": 12600000000.00, "revenue_actual": None, "fiscal_period": "Q1 2027", "source_provider": "SEC_EDGAR_OFFICIAL"},
             {"symbol": "STLA", "company_name": "Stellantis NV", "event_date": "2026-07-30", "time_of_day": "BEFORE_MARKET", "eps_estimate": 1.45, "eps_actual": None, "revenue_estimate": 85000000000.00, "revenue_actual": None, "fiscal_period": "H1 2026", "source_provider": "SEC_EDGAR_OFFICIAL"}
         ]
+        records = [r for r in all_official_earnings if r["symbol"] in active_stocks]
         
     return records
 
