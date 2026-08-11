@@ -49,7 +49,13 @@ def fetch_notion_block_children(block_id: str) -> List[Dict[str, Any]]:
 
         try:
             res = requests.get(url, headers=NOTION_HEADERS, params=params, timeout=15)
-            if res.status_code != 200:
+            if res.status_code == 404:
+                logging.error(
+                    f"❌ Erro HTTP 404 ao ler blocos de '{block_id}'. A página do Mapa não está partilhada com a integração no Notion!\n"
+                    "👉 Solução no Notion: Abra a página do Mapa (ou a base de dados pai) -> canto superior direito '...' -> 'Add connections' (Adicionar Ligações) -> Selecionar 'Nuelltech-Cron-Fortrade'."
+                )
+                break
+            elif res.status_code != 200:
                 logging.error(f"❌ Erro HTTP {res.status_code} ao ler blocos de {block_id}: {res.text}")
                 break
 
