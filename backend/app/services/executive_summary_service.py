@@ -460,7 +460,7 @@ Eventos Futuros de Alto Impacto (Próximos 7 Dias):
 {json.dumps(future_events, ensure_ascii=False, indent=2) if future_events else "Nenhum evento de alto impacto agendado."}
 """
 
-    raw_response = call_claude_api(system_prompt, user_prompt, max_tokens=1200)
+    raw_response = call_claude_api(system_prompt, user_prompt, max_tokens=3000)
     if not raw_response:
         logging.error("❌ Falha ao obter resposta da Claude API.")
         return None
