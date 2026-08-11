@@ -48,22 +48,86 @@ NOTION_HEADERS = {
     "Notion-Version": "2022-06-28"
 }
 
-# Universo primário de 20 ativos de vigilância
-PRIMARY_WATCHLIST = [
+NOTION_CONFIG_DB_ID = os.getenv("NOTION_CONFIG_DB_ID", "fb3a2102-c785-46c9-b2b4-5adecd9d5482").strip()
+
+DEFAULT_PRIMARY_WATCHLIST = [
     "^GSPC", "^NDX", "^SOX", "^GDAXI", "^STOXX50E", "^N225", "^HSI", "^KS11",
     "HG=F", "GC=F", "BZ=F", "CL=F", "DX-Y.NYB", "EURUSD=X", "GBPUSD=X", "USDJPY=X",
     "^TNX", "^TYX", "DGS2", "NVDA"
 ]
 
 ASSET_CLASS_MAP = {
-    "^GSPC": "Ações EUA", "^NDX": "Ações EUA", "^SOX": "Ações EUA", "NVDA": "Ações EUA",
+    "^GSPC": "Ações EUA", "^NDX": "Ações EUA", "^SOX": "Ações EUA", "NVDA": "Ações EUA", "TSM": "Ações EUA", "ASML": "Ações EUA",
     "^GDAXI": "Ações Europa", "^STOXX50E": "Ações Europa",
-    "^N225": "Ações Ásia", "^HSI": "Ações Ásia", "^KS11": "Ações Ásia", "BABA": "Ações Ásia",
+    "^N225": "Ações Ásia", "^HSI": "Ações Ásia", "^KS11": "Ações Ásia", "BABA": "Ações Ásia", "000001.SS": "Ações Ásia",
     "HG=F": "Commodities Industriais/Energia", "BZ=F": "Commodities Industriais/Energia", "CL=F": "Commodities Industriais/Energia",
-    "GC=F": "Commodities Industriais/Energia",
-    "DX-Y.NYB": "Forex", "EURUSD=X": "Forex", "GBPUSD=X": "Forex", "USDJPY=X": "Forex",
-    "^TNX": "Obrigações", "^TYX": "Obrigações", "DGS2": "Obrigações"
+    "GC=F": "Commodities Industriais/Energia", "NG=F": "Commodities Industriais/Energia", "SI=F": "Commodities Industriais/Energia", "CC=F": "Commodities Agrícolas",
+    "DX-Y.NYB": "Forex", "EURUSD=X": "Forex", "GBPUSD=X": "Forex", "USDJPY=X": "Forex", "USDCHF=X": "Forex", "USDCNH=X": "Forex",
+    "^TNX": "Obrigações", "^TYX": "Obrigações", "DGS2": "Obrigações", "TLT": "Obrigações"
 }
+
+def fetch_primary_watchlist_from_notion() -> List[str]:
+    """Extrai dinamicamente os ativos da tabela Configuração de Vigilância no Notion (Ativo = true)."""
+    if not NOTION_TOKEN or not NOTION_CONFIG_DB_ID:
+        logging.warning("⚠️ NOTION_TOKEN ou NOTION_CONFIG_DB_ID não configurados. Usando universo primário padrão (20 ativos).")
+        return DEFAULT_PRIMARY_WATCHLIST
+
+    try:
+        url = f"https://api.notion.com/v1/databases/{NOTION_CONFIG_DB_ID}/query"
+        payload = {
+            "filter": {
+                "property": "Ativo",
+                "checkbox": {"equals": True}
+            }
+        }
+        res = requests.post(url, headers=NOTION_HEADERS, json=payload, timeout=10)
+        if res.status_code == 200:
+            results = res.json().get("results", [])
+            active_tickers = []
+            for p in results:
+                props = p.get("properties", {})
+                ticker_str = ""
+                for p_name, p_val in props.items():
+                    if p_val.get("type") == "title" and p_val.get("title"):
+                        ticker_str = p_val["title"][0].get("plain_text", "").strip()
+                    elif "Ticker" in p_name or "Symbol" in p_name:
+                        if p_val.get("type") == "rich_text" and p_val.get("rich_text"):
+                            ticker_str = p_val["rich_text"][0].get("plain_text", "").strip()
+                if ticker_str and ticker_str not in active_tickers:
+                    active_tickers.append(ticker_str)
+            
+            if active_tickers:
+                logging.info(f"✅ Universo Primário carregado dinamicamente do Notion Configuração de Vigilância ({len(active_tickers)} ativos): {active_tickers}")
+                return active_tickers
+    except Exception as e:
+        logging.warning(f"Erro ao ler Configuração de Vigilância no Notion: {e}")
+
+    return DEFAULT_PRIMARY_WATCHLIST
+
+def fetch_secondary_watchlist_from_mysql() -> List[str]:
+    """Extrai o universo secundário completo de 53 tickers da tabela indicators_catalog / indicator_values no MySQL."""
+    try:
+        with engine.connect() as conn:
+            # 1. Tentar ler da tabela indicators_catalog (coluna 'ticker')
+            try:
+                rows = conn.execute(text("SELECT ticker FROM indicators_catalog WHERE is_active = 1 OR is_active IS NULL")).fetchall()
+                tickers = [str(r[0]).strip() for r in rows if r[0]]
+                if len(tickers) >= 10:
+                    logging.info(f"✅ Universo Secundário carregado dinamicamente do MySQL indicators_catalog ({len(tickers)} tickers).")
+                    return tickers
+            except Exception:
+                pass
+
+            # 2. Fallback: ler do indicator_values no MySQL
+            rows = conn.execute(text("SELECT DISTINCT symbol FROM indicator_values")).fetchall()
+            tickers = [str(r[0]).strip() for r in rows if r[0]]
+            if tickers:
+                logging.info(f"✅ Universo Secundário carregado dinamicamente do MySQL indicator_values ({len(tickers)} tickers).")
+                return tickers
+    except Exception as e:
+        logging.warning(f"Erro ao buscar universo secundário no MySQL: {e}")
+
+    return DEFAULT_PRIMARY_WATCHLIST
 
 
 def get_notion_db_schema(db_id: str) -> Dict[str, str]:
@@ -167,20 +231,36 @@ def run_tarefa1_calculo_mecanico(target_date: str, window_sessions: int = 11) ->
     calc["date_start"] = date_start
     calc["date_end"] = date_end
 
-    # 2. Variação % no Universo Primário (20 Ativos)
+    # 2. Carregar Universo Primário (Configuração de Vigilância Notion) e Secundário (MySQL)
+    primary_watchlist = fetch_primary_watchlist_from_notion()
+    secondary_watchlist = fetch_secondary_watchlist_from_mysql()
+
+    # 3. Variação % no Universo Primário
     primary_variations: Dict[str, float] = {}
-    for sym in PRIMARY_WATCHLIST:
+    for sym in primary_watchlist:
         v = fetch_asset_variation_in_window(sym, date_start, date_end)
         if v is not None:
             primary_variations[sym] = v
-        else:
-            # Fallback tolerante para ativos secundários
-            pass
 
-    if len(primary_variations) < 10:
+    if len(primary_variations) < 5:
         errors.append(f"Cotações de origem em falta para a maioria dos ativos do universo primário.")
 
-    # Ordenar variações descendentes
+    # 4. Scan Secundário (Universo Largo de 53 Tickers)
+    sec_automático = []
+    sec_gatilhos = []
+    for sym in secondary_watchlist:
+        v = fetch_asset_variation_in_window(sym, date_start, date_end)
+        if v is not None:
+            abs_v = abs(v)
+            if abs_v > 5.0:
+                sec_automático.append(f"{sym} ({v:+.2f}%)")
+            elif 3.0 <= abs_v <= 5.0:
+                sec_gatilhos.append(f"{sym} ({v:+.2f}%)")
+
+    calc["secundario_automatico"] = sec_automático
+    calc["secundario_gatilhos"] = sec_gatilhos
+
+    # Ordenar variações descendentes do universo primário
     sorted_assets = sorted(primary_variations.items(), key=lambda x: x[1], reverse=True)
     
     top3_lideres = sorted_assets[:3] if len(sorted_assets) >= 3 else sorted_assets
