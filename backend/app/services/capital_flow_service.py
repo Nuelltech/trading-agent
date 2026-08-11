@@ -69,7 +69,7 @@ ASSET_CLASS_MAP = {
 def fetch_primary_watchlist_from_notion() -> List[str]:
     """Extrai dinamicamente os ativos da tabela Configuração de Vigilância no Notion (Ativo = true)."""
     if not NOTION_TOKEN or not NOTION_CONFIG_DB_ID:
-        logging.warning("⚠️ NOTION_TOKEN ou NOTION_CONFIG_DB_ID não configurados. Usando universo primário padrão (20 ativos).")
+        logging.warning(f"⚠️ [FONTE: FALLBACK ATIVADO] NOTION_TOKEN ou NOTION_CONFIG_DB_ID não configurados. Usando lista padrão ({len(DEFAULT_PRIMARY_WATCHLIST)} ativos).")
         return DEFAULT_PRIMARY_WATCHLIST
 
     try:
@@ -97,11 +97,16 @@ def fetch_primary_watchlist_from_notion() -> List[str]:
                     active_tickers.append(ticker_str)
             
             if active_tickers:
-                logging.info(f"✅ Universo Primário carregado dinamicamente do Notion Configuração de Vigilância ({len(active_tickers)} ativos): {active_tickers}")
+                logging.info(f"✅ [FONTE: NOTION LIVE] Configuração de Vigilância respondeu HTTP 200 OK. {len(active_tickers)} ativos extraídos dinamicamente do Notion com Ativo=true: {active_tickers}")
                 return active_tickers
+            else:
+                logging.warning("⚠️ [FONTE: NOTION VAZIO] Nenhum ativo com Ativo=true encontrado no Notion. Ativando lista fallback.")
+        else:
+            logging.error(f"❌ [FONTE: NOTION ERRO HTTP {res.status_code}] Falha ao ler Configuração de Vigilância no Notion: {res.text}. Ativando lista fallback.")
     except Exception as e:
-        logging.warning(f"Erro ao ler Configuração de Vigilância no Notion: {e}")
+        logging.error(f"❌ Exceção ao ler Configuração de Vigilância no Notion: {e}")
 
+    logging.warning(f"⚠️ [FONTE: FALLBACK ATIVADO] A usar universo primário de salvaguarda ({len(DEFAULT_PRIMARY_WATCHLIST)} ativos).")
     return DEFAULT_PRIMARY_WATCHLIST
 
 def fetch_secondary_watchlist_from_mysql() -> List[str]:
@@ -113,7 +118,7 @@ def fetch_secondary_watchlist_from_mysql() -> List[str]:
                 rows = conn.execute(text("SELECT ticker FROM indicators_catalog WHERE is_active = 1 OR is_active IS NULL")).fetchall()
                 tickers = [str(r[0]).strip() for r in rows if r[0]]
                 if len(tickers) >= 10:
-                    logging.info(f"✅ Universo Secundário carregado dinamicamente do MySQL indicators_catalog ({len(tickers)} tickers).")
+                    logging.info(f"✅ [FONTE: MYSQL LIVE] indicators_catalog respondeu com {len(tickers)} tickers para o scan secundário.")
                     return tickers
             except Exception:
                 pass
@@ -122,11 +127,12 @@ def fetch_secondary_watchlist_from_mysql() -> List[str]:
             rows = conn.execute(text("SELECT DISTINCT symbol FROM indicator_values")).fetchall()
             tickers = [str(r[0]).strip() for r in rows if r[0]]
             if tickers:
-                logging.info(f"✅ Universo Secundário carregado dinamicamente do MySQL indicator_values ({len(tickers)} tickers).")
+                logging.info(f"✅ [FONTE: MYSQL LIVE] indicator_values respondeu com {len(tickers)} tickers para o scan secundário.")
                 return tickers
     except Exception as e:
         logging.warning(f"Erro ao buscar universo secundário no MySQL: {e}")
 
+    logging.warning(f"⚠️ [FONTE: FALLBACK MYSQL ATIVADO] A usar lista padrão secundária ({len(DEFAULT_PRIMARY_WATCHLIST)} ativos).")
     return DEFAULT_PRIMARY_WATCHLIST
 
 
