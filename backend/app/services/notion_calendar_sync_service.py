@@ -224,21 +224,65 @@ def _notion_update_page(page_id: str, properties: Dict[str, Any]) -> bool:
     return False
 
 
-def upsert_economic_event(row: Dict[str, Any]) -> str:
+def get_notion_calendar_schema() -> Dict[str, Tuple[str, str]]:
+    """Descobre o schema real da database Calendário Económico do Notion {prop_name: (prop_name, prop_type)}."""
+    if not NOTION_TOKEN or not NOTION_CALENDAR_DB_ID:
+        return {}
+    url = f"https://api.notion.com/v1/databases/{NOTION_CALENDAR_DB_ID}"
+    try:
+        res = requests.get(url, headers=NOTION_HEADERS, timeout=10)
+        if res.status_code == 200:
+            properties = res.json().get("properties", {})
+            return {p_name: (p_name, p_data.get("type")) for p_name, p_data in properties.items()}
+    except Exception as e:
+        logging.warning(f"Falha ao ler schema da db Notion Calendário Económico: {e}")
+    return {}
+
+
+def find_schema_prop_matching(schema: Dict[str, Tuple[str, str]], candidate_names: List[str]) -> Optional[Tuple[str, str]]:
+    for candidate in candidate_names:
+        if candidate in schema:
+            return schema[candidate]
+        clean_cand = candidate.lower().replace("ã", "a").replace("ç", "c").replace("ê", "e").replace("é", "e").replace("á", "a").replace(" ", "").replace("-", "").replace("_", "")
+        for p_name, (orig_name, p_type) in schema.items():
+            clean_p = p_name.lower().replace("ã", "a").replace("ç", "c").replace("ê", "e").replace("é", "e").replace("á", "a").replace(" ", "").replace("-", "").replace("_", "")
+            if clean_cand in clean_p or clean_p in clean_cand:
+                return orig_name, p_type
+    return None
+
+
+def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]] = None) -> str:
     """
     Upsert de um evento macro (economic_calendar) no Notion.
     Devolve 'created', 'updated' ou 'error'.
     """
     mysql_id = row["id"]
     tabela_origem = "economic_calendar"
+    if schema is None:
+        schema = get_notion_calendar_schema()
 
     existing_page_id = _notion_find_existing_page(mysql_id, tabela_origem)
 
     # Campos "Real" que podem mudar após o evento acontecer
-    real_text = _format_value(row.get("actual_val"), row.get("unit", ""))
+    real_val = row.get("actual_val")
+    real_text = _format_value(real_val, row.get("unit", ""))
+    
+    real_prop = find_schema_prop_matching(schema, ["Real", "Resultado Real", "Leitura Real", "Valor Real", "EPS Real"])
+    forecast_prop = find_schema_prop_matching(schema, ["Projetado", "Previsão", "Estimativa", "Forecast", "EPS Estimado"])
+
     update_props = {}
-    if real_text:
-        update_props["Real"] = {"rich_text": _build_rich_text(real_text)}
+    if real_val is not None and real_prop:
+        p_name, p_type = real_prop
+        if p_type == "number":
+            try:
+                update_props[p_name] = {"number": float(real_val)}
+            except Exception:
+                update_props[p_name] = {"rich_text": _build_rich_text(real_text)}
+        else:
+            update_props[p_name] = {"rich_text": _build_rich_text(real_text)}
+    elif real_text and real_prop:
+        p_name, _ = real_prop
+        update_props[p_name] = {"rich_text": _build_rich_text(real_text)}
 
     if existing_page_id:
         # Só atualiza campos "Real" — nunca reescreve Evento, Data, Tipo, etc.
@@ -277,12 +321,23 @@ def upsert_economic_event(row: Dict[str, Any]) -> str:
     if date_str:
         full_props["Data"] = {"date": {"start": date_str}}
 
-    forecast_text = _format_value(row.get("forecast_val"), row.get("unit", ""))
-    if forecast_text:
-        full_props["Projetado"] = {"rich_text": _build_rich_text(forecast_text)}
+    forecast_val = row.get("forecast_val")
+    forecast_text = _format_value(forecast_val, row.get("unit", ""))
+    if forecast_val is not None and forecast_prop:
+        p_name, p_type = forecast_prop
+        if p_type == "number":
+            try:
+                full_props[p_name] = {"number": float(forecast_val)}
+            except Exception:
+                full_props[p_name] = {"rich_text": _build_rich_text(forecast_text)}
+        else:
+            full_props[p_name] = {"rich_text": _build_rich_text(forecast_text)}
+    elif forecast_text and forecast_prop:
+        p_name, _ = forecast_prop
+        full_props[p_name] = {"rich_text": _build_rich_text(forecast_text)}
 
-    if real_text:
-        full_props["Real"] = {"rich_text": _build_rich_text(real_text)}
+    if update_props:
+        full_props.update(update_props)
 
     success = _notion_create_page(full_props)
     return "created" if success else "error"
