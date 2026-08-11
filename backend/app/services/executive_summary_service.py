@@ -38,7 +38,12 @@ NOTION_CAMADA0_DB_ID = os.getenv("NOTION_CAMADA0_DB_ID", "cc9794eb-da24-4c9a-811
 
 NOTION_FEED_NOTICIAS_DB_ID = os.getenv("NOTION_FEED_NOTICIAS_DB_ID", "e1c8d3ab-a151-499f-8931-4537f29933ec").strip()
 NOTION_DIARIO_BORDO_DB_ID = os.getenv("NOTION_DIARIO_BORDO_DB_ID", "").strip()
-NOTION_RESUMO_EXECUTIVO_DB_ID = os.getenv("NOTION_RESUMO_EXECUTIVO_DB_ID", "").strip()
+NOTION_RESUMO_EXECUTIVO_DB_ID = (
+    os.getenv("NOTION_RESUMO_EXECUTIVO_DB_ID", "").strip() or
+    os.getenv("NOTION_CLAUDE_REGIME_DATABASE_ID", "").strip() or
+    os.getenv("NOTION_PAINEL_MERCADO_DATABASE_ID", "").strip() or
+    "3efd828b-84a7-4966-8bdf-fe9c93657edd"
+)
 
 NOTION_HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -483,19 +488,19 @@ Eventos Futuros de Alto Impacto (Próximos 7 Dias):
 
 
 def write_executive_summary_to_notion(target_date: str, data: Dict[str, Any]) -> bool:
-    """Grava os 11 campos na database 'Resumo Executivo Diário' no Notion."""
+    """
+    Grava/Atualiza os campos do Resumo Executivo na tabela do Notion.
+    Se a página da data já existir (ex: criada pela Camada 1), faz PATCH/UPDATE.
+    Se não existir, faz POST (criação).
+    """
     if not NOTION_TOKEN or not NOTION_RESUMO_EXECUTIVO_DB_ID:
         logging.error("❌ NOTION_TOKEN ou NOTION_RESUMO_EXECUTIVO_DB_ID não configurados.")
         return False
 
     title_text = f"Resumo — {target_date}"
-    url_post = "https://api.notion.com/v1/pages"
-
     from app.services.notion_calendar_sync_service import _build_rich_text
 
     props = {
-        "Data + Título": {"title": [{"text": {"content": title_text}}]},
-        "Data": {"date": {"start": target_date}},
         "Resumo Executivo": {"rich_text": _build_rich_text(str(data.get("resumo_executivo", "")))},
         "Instrumentos Afetados": {"rich_text": _build_rich_text(str(data.get("instrumentos_afetados", "")))},
         "Catalisadores Identificados": {"rich_text": _build_rich_text(str(data.get("catalisadores_identificados", "")))},
@@ -506,19 +511,55 @@ def write_executive_summary_to_notion(target_date: str, data: Dict[str, Any]) ->
         "Previsão Multi-Dia": {"rich_text": _build_rich_text(str(data.get("previsao_multidia", "")))}
     }
 
-    payload = {
-        "parent": {"database_id": NOTION_RESUMO_EXECUTIVO_DB_ID},
-        "properties": props
-    }
-
+    # 1. Procurar se já existe página para a data nesta database
+    existing_page_id = None
     try:
-        res = requests.post(url_post, headers=NOTION_HEADERS, json=payload, timeout=10)
-        if res.status_code in [200, 201]:
-            logging.info(f"🎉 [NOTION SUCESSO] Linha '{title_text}' gravada com sucesso na tabela Resumo Executivo Diário!")
-            return True
-        else:
-            logging.error(f"❌ Erro HTTP {res.status_code} ao gravar no Notion: {res.text}")
-    except Exception as e:
-        logging.error(f"❌ Exceção ao gravar no Notion: {e}")
+        url_query = f"https://api.notion.com/v1/databases/{NOTION_RESUMO_EXECUTIVO_DB_ID}/query"
+        payload_query = {
+            "filter": {
+                "or": [
+                    {"property": "Data + Título", "title": {"contains": target_date}},
+                    {"property": "Data", "date": {"equals": target_date}}
+                ]
+            }
+        }
+        res_query = requests.post(url_query, headers=NOTION_HEADERS, json=payload_query, timeout=10)
+        if res_query.status_code == 200:
+            results = res_query.json().get("results", [])
+            if results:
+                existing_page_id = results[0]["id"]
+    except Exception as query_err:
+        logging.warning(f"⚠️ Erro ao procurar página existente da data {target_date}: {query_err}")
+
+    # 2. Se já existe -> PATCH; Se não existe -> POST
+    if existing_page_id:
+        url_patch = f"https://api.notion.com/v1/pages/{existing_page_id}"
+        payload_patch = {"properties": props}
+        try:
+            res = requests.patch(url_patch, headers=NOTION_HEADERS, json=payload_patch, timeout=10)
+            if res.status_code == 200:
+                logging.info(f"🎉 [NOTION SUCESSO] Página existente '{target_date}' atualizada com sucesso no Notion!")
+                return True
+            else:
+                logging.error(f"❌ Erro HTTP {res.status_code} ao atualizar página Notion: {res.text}")
+        except Exception as e:
+            logging.error(f"❌ Exceção ao atualizar página no Notion: {e}")
+    else:
+        props["Data + Título"] = {"title": [{"text": {"content": title_text}}]}
+        props["Data"] = {"date": {"start": target_date}}
+        url_post = "https://api.notion.com/v1/pages"
+        payload_post = {
+            "parent": {"database_id": NOTION_RESUMO_EXECUTIVO_DB_ID},
+            "properties": props
+        }
+        try:
+            res = requests.post(url_post, headers=NOTION_HEADERS, json=payload_post, timeout=10)
+            if res.status_code in [200, 201]:
+                logging.info(f"🎉 [NOTION SUCESSO] Nova linha '{title_text}' criada com sucesso na tabela Resumo Executivo Diário!")
+                return True
+            else:
+                logging.error(f"❌ Erro HTTP {res.status_code} ao criar linha no Notion: {res.text}")
+        except Exception as e:
+            logging.error(f"❌ Exceção ao criar linha no Notion: {e}")
 
     return False
