@@ -1,0 +1,67 @@
+name: Cron - Catalisadores & Mapas de Transmissão
+
+on:
+  schedule:
+    # Executa diariamente às 06:00 UTC (antes das operações matinais)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Execução manual sob demanda
+
+jobs:
+  run-catalysts-cron:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pymysql sqlalchemy cryptography pydantic pydantic-settings notion-client anthropic
+
+      - name: Executar Cron de Catalisadores
+        env:
+          MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
+          MYSQL_PORT: ${{ secrets.MYSQL_PORT || '3306' }}
+          MYSQL_USER: ${{ secrets.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN || secrets.NOTION_API_KEY }}
+          NOTION_CALENDAR_DB_ID: ${{ secrets.NOTION_CALENDAR_DB_ID || 'bb7305d4-8a74-4622-b981-6f9a34bb0f35' }}
+          NOTION_CAMADA0_DB_ID: ${{ secrets.NOTION_CAMADA0_DB_ID || 'cc9794eb-da24-4c9a-8116-ba859efa65aa' }}
+          NOTION_MAPAS_TRANSMISSAO_IDS: ${{ secrets.NOTION_MAPAS_TRANSMISSAO_IDS }}
+          ANTHROPIC_API_KEY_TRADING: ${{ secrets.ANTHROPIC_API_KEY_TRADING || secrets.ANTHROPIC_API_KEY }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM || secrets.SMTP_USERNAME }}
+          ALERT_EMAIL_FROM_NAME: ${{ secrets.ALERT_EMAIL_FROM_NAME || 'Trader AI' }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          SMTP_SERVER_HOSTINGER: ${{ secrets.SMTP_SERVER_HOSTINGER }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER_HOSTINGER || secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || '465' }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_HOSTINGER_PASSWD: ${{ secrets.SMTP_HOSTINGER_PASSWD }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_HOSTINGER_PASSWD || secrets.SMTP_PASSWORD }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: |
+          python scripts/run_catalysts_cron.py --full
+
+      - name: Notificar Falha Crítica por Email
+        if: failure()
+        env:
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM || secrets.SMTP_USERNAME }}
+          ALERT_EMAIL_FROM_NAME: ${{ secrets.ALERT_EMAIL_FROM_NAME || 'Trader AI' }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          SMTP_SERVER_HOSTINGER: ${{ secrets.SMTP_SERVER_HOSTINGER }}
+          SMTP_SERVER: ${{ secrets.SMTP_SERVER_HOSTINGER || secrets.SMTP_SERVER }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || '465' }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_HOSTINGER_PASSWD: ${{ secrets.SMTP_HOSTINGER_PASSWD }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_HOSTINGER_PASSWD || secrets.SMTP_PASSWORD }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: |
+          python -c "import sys; sys.path.append('backend'); from app.services.alert_service import send_alert_notification; send_alert_notification('🚨 [FALHA CRÍTICA GITHUB ACTIONS] O workflow Cron de Catalisadores falhou!')"
