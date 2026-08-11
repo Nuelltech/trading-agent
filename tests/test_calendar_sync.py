@@ -148,25 +148,17 @@ class TestUpsertEconomicEvent(unittest.TestCase):
 
     @patch("app.services.notion_calendar_sync_service._notion_find_existing_page", return_value="existing-page-id")
     @patch("app.services.notion_calendar_sync_service._notion_update_page", return_value=True)
-    def test_updates_only_real_fields_when_exists(self, mock_update, mock_find):
+    def test_updates_real_and_date_fields_when_exists(self, mock_update, mock_find):
         result = upsert_economic_event(self._make_eco_row(actual_val=3.75))
         self.assertEqual(result, "updated")
 
-        # Só "Real" deve ser atualizado — nunca Evento, Data, Tipo, etc.
+        # "Real" e "Data" com hora ISO 8601 devem ser atualizados no PATCH
         updated_props = mock_update.call_args[0][1]
         self.assertIn("Real", updated_props)
+        self.assertIn("Data", updated_props)
         self.assertNotIn("Evento", updated_props)
-        self.assertNotIn("Data", updated_props)
         self.assertNotIn("Tipo", updated_props)
         self.assertNotIn("Impacto nos Nossos Ativos", updated_props)
-
-    @patch("app.services.notion_calendar_sync_service._notion_find_existing_page", return_value="existing-page-id")
-    @patch("app.services.notion_calendar_sync_service._notion_update_page", return_value=True)
-    def test_skips_update_when_no_real_data(self, mock_update, mock_find):
-        """Se actual_val for None (evento futuro), não faz PATCH desnecessário."""
-        result = upsert_economic_event(self._make_eco_row(actual_val=None))
-        self.assertEqual(result, "skipped")
-        mock_update.assert_not_called()
 
 
 class TestUpsertEarningsEvent(unittest.TestCase):

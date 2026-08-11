@@ -310,6 +310,8 @@ def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]
     hora_prop = find_schema_prop_matching(schema, ["Hora", "Horário", "Hora de Lançamento"])
 
     update_props = {}
+    if date_str:
+        update_props["Data"] = {"date": {"start": date_str}}
     if time_text and hora_prop:
         p_name, _ = hora_prop
         update_props[p_name] = {"rich_text": _build_rich_text(time_text)}
