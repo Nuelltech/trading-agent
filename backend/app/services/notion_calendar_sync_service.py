@@ -224,10 +224,20 @@ def _notion_update_page(page_id: str, properties: Dict[str, Any]) -> bool:
     return False
 
 
+DEFAULT_CALENDAR_SCHEMA = {
+    "Real": ("Real", "rich_text"),
+    "Projetado": ("Projetado", "rich_text"),
+    "EPS Real": ("EPS Real", "number"),
+    "EPS Estimado": ("EPS Estimado", "number"),
+    "Receita Real": ("Receita Real", "number"),
+    "Receita Estimada": ("Receita Estimada", "number"),
+}
+
+
 def get_notion_calendar_schema() -> Dict[str, Tuple[str, str]]:
     """Descobre o schema real da database Calendário Económico do Notion {prop_name: (prop_name, prop_type)}."""
     if not NOTION_TOKEN or not NOTION_CALENDAR_DB_ID:
-        return {}
+        return DEFAULT_CALENDAR_SCHEMA
     url = f"https://api.notion.com/v1/databases/{NOTION_CALENDAR_DB_ID}"
     try:
         res = requests.get(url, headers=NOTION_HEADERS, timeout=10)
@@ -236,10 +246,12 @@ def get_notion_calendar_schema() -> Dict[str, Tuple[str, str]]:
             return {p_name: (p_name, p_data.get("type")) for p_name, p_data in properties.items()}
     except Exception as e:
         logging.warning(f"Falha ao ler schema da db Notion Calendário Económico: {e}")
-    return {}
+    return DEFAULT_CALENDAR_SCHEMA
 
 
 def find_schema_prop_matching(schema: Dict[str, Tuple[str, str]], candidate_names: List[str]) -> Optional[Tuple[str, str]]:
+    if not schema:
+        schema = DEFAULT_CALENDAR_SCHEMA
     for candidate in candidate_names:
         if candidate in schema:
             return schema[candidate]
@@ -258,8 +270,8 @@ def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]
     """
     mysql_id = row["id"]
     tabela_origem = "economic_calendar"
-    if schema is None:
-        schema = get_notion_calendar_schema()
+    if not schema:
+        schema = get_notion_calendar_schema() or DEFAULT_CALENDAR_SCHEMA
 
     existing_page_id = _notion_find_existing_page(mysql_id, tabela_origem)
 
