@@ -275,35 +275,7 @@ def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]
 
     existing_page_id = _notion_find_existing_page(mysql_id, tabela_origem)
 
-    # Campos "Real" que podem mudar após o evento acontecer
-    real_val = row.get("actual_val")
-    real_text = _format_value(real_val, row.get("unit", ""))
-    
-    real_prop = find_schema_prop_matching(schema, ["Real", "Resultado Real", "Leitura Real", "Valor Real", "EPS Real"])
-    forecast_prop = find_schema_prop_matching(schema, ["Projetado", "Previsão", "Estimativa", "Forecast", "EPS Estimado"])
-
-    update_props = {}
-    if real_val is not None and real_prop:
-        p_name, p_type = real_prop
-        if p_type == "number":
-            try:
-                update_props[p_name] = {"number": float(real_val)}
-            except Exception:
-                update_props[p_name] = {"rich_text": _build_rich_text(real_text)}
-        else:
-            update_props[p_name] = {"rich_text": _build_rich_text(real_text)}
-    elif real_text and real_prop:
-        p_name, _ = real_prop
-        update_props[p_name] = {"rich_text": _build_rich_text(real_text)}
-
-    if existing_page_id:
-        # Só atualiza campos "Real" — nunca reescreve Evento, Data, Tipo, etc.
-        if update_props:
-            success = _notion_update_page(existing_page_id, update_props)
-            return "updated" if success else "error"
-        return "skipped"  # Sem dados novos para actualizar
-
-    # Criar nova página completa
+    # 1. Formatar Data e Hora (ISO 8601 com hora exata)
     event_date = row.get("event_timestamp")
     time_text = ""
     if isinstance(event_date, datetime):
@@ -329,6 +301,41 @@ def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]
     else:
         date_str = None
 
+    # 2. Campos "Real" que podem mudar após o evento acontecer
+    real_val = row.get("actual_val")
+    real_text = _format_value(real_val, row.get("unit", ""))
+    
+    real_prop = find_schema_prop_matching(schema, ["Real", "Resultado Real", "Leitura Real", "Valor Real", "EPS Real"])
+    forecast_prop = find_schema_prop_matching(schema, ["Projetado", "Previsão", "Estimativa", "Forecast", "EPS Estimado"])
+    hora_prop = find_schema_prop_matching(schema, ["Hora", "Horário", "Hora de Lançamento"])
+
+    update_props = {}
+    if time_text and hora_prop:
+        p_name, _ = hora_prop
+        update_props[p_name] = {"rich_text": _build_rich_text(time_text)}
+
+    if real_val is not None and real_prop:
+        p_name, p_type = real_prop
+        if p_type == "number":
+            try:
+                update_props[p_name] = {"number": float(real_val)}
+            except Exception:
+                update_props[p_name] = {"rich_text": _build_rich_text(real_text)}
+        else:
+            update_props[p_name] = {"rich_text": _build_rich_text(real_text)}
+    elif real_text and real_prop:
+        p_name, _ = real_prop
+        update_props[p_name] = {"rich_text": _build_rich_text(real_text)}
+
+    logging.info(f"⏰ [NOTION CALENDAR HORA] [{row.get('event_name')}] -> Data/Hora enviada ao Notion: '{date_str}' (Hora: '{time_text or 'N/A'}')")
+
+    if existing_page_id:
+        if update_props:
+            success = _notion_update_page(existing_page_id, update_props)
+            return "updated" if success else "error"
+        return "skipped"
+
+    # Criar nova página completa
     full_props: Dict[str, Any] = {
         "Evento": {
             "title": [{"text": {"content": str(row.get("event_name", ""))[:255]}}]
@@ -343,12 +350,6 @@ def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]
 
     if date_str:
         full_props["Data"] = {"date": {"start": date_str}}
-
-    # Suporte flexível a coluna Hora / Horário no Notion
-    hora_prop = find_schema_prop_matching(schema, ["Hora", "Horário", "Hora de Lançamento"])
-    if time_text and hora_prop:
-        p_name, _ = hora_prop
-        full_props[p_name] = {"rich_text": _build_rich_text(time_text)}
 
     forecast_val = row.get("forecast_val")
     forecast_text = _format_value(forecast_val, row.get("unit", ""))
