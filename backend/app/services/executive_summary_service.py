@@ -532,6 +532,7 @@ def write_executive_summary_to_notion(target_date: str, data: Dict[str, Any]) ->
         logging.warning(f"⚠️ Erro ao procurar página existente da data {target_date}: {query_err}")
 
     # 2. Se já existe -> PATCH; Se não existe -> POST
+    success = False
     if existing_page_id:
         url_patch = f"https://api.notion.com/v1/pages/{existing_page_id}"
         payload_patch = {"properties": props}
@@ -539,7 +540,7 @@ def write_executive_summary_to_notion(target_date: str, data: Dict[str, Any]) ->
             res = requests.patch(url_patch, headers=NOTION_HEADERS, json=payload_patch, timeout=10)
             if res.status_code == 200:
                 logging.info(f"🎉 [NOTION SUCESSO] Página existente '{target_date}' atualizada com sucesso no Notion!")
-                return True
+                success = True
             else:
                 logging.error(f"❌ Erro HTTP {res.status_code} ao atualizar página Notion: {res.text}")
         except Exception as e:
@@ -556,10 +557,17 @@ def write_executive_summary_to_notion(target_date: str, data: Dict[str, Any]) ->
             res = requests.post(url_post, headers=NOTION_HEADERS, json=payload_post, timeout=10)
             if res.status_code in [200, 201]:
                 logging.info(f"🎉 [NOTION SUCESSO] Nova linha '{title_text}' criada com sucesso na tabela Resumo Executivo Diário!")
-                return True
+                success = True
             else:
                 logging.error(f"❌ Erro HTTP {res.status_code} ao criar linha no Notion: {res.text}")
         except Exception as e:
             logging.error(f"❌ Exceção ao criar linha no Notion: {e}")
 
-    return False
+    if success:
+        try:
+            from app.services.alert_service import send_executive_summary_email
+            send_executive_summary_email(data, target_date)
+        except Exception as mail_err:
+            logging.warning(f"⚠️ Aviso ao enviar e-mail do resumo executivo: {mail_err}")
+
+    return success

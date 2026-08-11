@@ -274,6 +274,170 @@ def check_quarantine_sla_violations(hours_threshold: int = 12) -> int:
                 
     except Exception as e:
         logging.error(f"Erro ao verificar SLA de quarentena: {e}")
-        return -1
+        return violations
         
     return violations
+
+
+def send_executive_summary_email(data: Dict[str, Any], target_date: str) -> bool:
+    """
+    Envia o Resumo Executivo Diário por E-mail formatado por capítulos HTML.
+    Reutiliza exatamente o mesmo dicionário JSON retornado pelo Claude (0% de custo LLM extra).
+    """
+    if not (SMTP_SERVER and ALERT_EMAIL_TO):
+        logging.warning("⚠️ SMTP_SERVER ou ALERT_EMAIL_TO não configurados para envio do e-mail do Resumo Executivo.")
+        return False
+
+    sender_address = ALERT_EMAIL_FROM or SMTP_USERNAME
+    from_header = formataddr((ALERT_EMAIL_FROM_NAME, sender_address)) if ALERT_EMAIL_FROM_NAME else sender_address
+
+    subject = f"Resumo Executivo Diario - {target_date}"
+    clean_subj_raw = remove_emojis(subject)
+    clean_subject = f"Trading Agent: {clean_subj_raw}" if not clean_subj_raw.startswith("Trading Agent") else clean_subj_raw
+
+    cenario_macro = str(data.get("cenario_macro", "N/A"))
+    resumo_executivo = str(data.get("resumo_executivo", "N/A"))
+    instrumentos_afetados = str(data.get("instrumentos_afetados", "N/A"))
+    catalisadores_identificados = str(data.get("catalisadores_identificados", "N/A"))
+    posicoes_abertas = str(data.get("posicoes_abertas_status", "Nenhuma posição aberta."))
+    previsao_multidia = str(data.get("previsao_multidia", "N/A"))
+    fontes_noticias = str(data.get("fontes_noticias_usadas", "N/A"))
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        body {{ font-family: Arial, sans-serif; background-color: #f4f6f9; color: #1e293b; margin: 0; padding: 20px; }}
+        .container {{ max-width: 680px; margin: 0 auto; background: #ffffff; border-radius: 12px; padding: 28px; border: 1px solid #e2e8f0; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }}
+        .header {{ border-bottom: 3px solid #2563eb; padding-bottom: 14px; margin-bottom: 24px; }}
+        .header h1 {{ margin: 0; color: #0f172a; font-size: 22px; font-weight: bold; }}
+        .header p {{ margin: 4px 0 0 0; color: #64748b; font-size: 13px; }}
+        .chapter {{ margin-bottom: 24px; padding: 18px; border-radius: 8px; background: #f8fafc; border-left: 4px solid #3b82f6; }}
+        .chapter h2 {{ margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #1e40af; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; }}
+        .chapter p {{ margin: 0; font-size: 14px; line-height: 1.6; color: #334155; }}
+        .footer {{ text-align: center; border-top: 1px solid #e2e8f0; padding-top: 14px; margin-top: 28px; font-size: 12px; color: #94a3b8; }}
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>Resumo Executivo Diario</h1>
+          <p>Data de Referencia: {target_date} | Trading Agent System</p>
+        </div>
+
+        <div class="chapter">
+          <h2>Capitulo 1: Cenario Macro & Tese Estrutural</h2>
+          <p>{cenario_macro}</p>
+        </div>
+
+        <div class="chapter">
+          <h2>Capitulo 2: Resumo Executivo do Dia</h2>
+          <p>{resumo_executivo}</p>
+        </div>
+
+        <div class="chapter">
+          <h2>Capitulo 3: Instrumentos Afetados & Catalisadores Identificados</h2>
+          <p><strong>Movimentos Relevantes:</strong><br>{instrumentos_afetados}</p>
+          <br>
+          <p><strong>Catalisadores:</strong><br>{catalisadores_identificados}</p>
+        </div>
+
+        <div class="chapter">
+          <h2>Capitulo 4: Posicoes Abertas (Diario de Bordo)</h2>
+          <p>{posicoes_abertas}</p>
+        </div>
+
+        <div class="chapter">
+          <h2>Capitulo 5: Previsao Multi-Dia & O Que Vigiar</h2>
+          <p>{previsao_multidia}</p>
+        </div>
+
+        <div class="footer">
+          <p>Noticias Utilizadas: {fontes_noticias}</p>
+          <p>Trading Agent Autonomous System - Notificacao Automatica</p>
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+
+    plain_text = f"""RESUMO EXECUTIVO DIARIO — {target_date}
+
+CAPITULO 1: CENARIO MACRO
+{cenario_macro}
+
+CAPITULO 2: RESUMO EXECUTIVO DO DIA
+{resumo_executivo}
+
+CAPITULO 3: INSTRUMENTOS AFETADOS E CATALISADORES
+{instrumentos_afetados}
+
+{catalisadores_identificados}
+
+CAPITULO 4: POSICOES ABERTAS
+{posicoes_abertas}
+
+CAPITULO 5: PREVISAO MULTI-DIA
+{previsao_multidia}
+"""
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["From"] = from_header
+        msg["To"] = ALERT_EMAIL_TO
+        msg["Subject"] = clean_subject
+
+        msg.attach(MIMEText(plain_text, "plain", "utf-8"))
+        msg.attach(MIMEText(html_content, "html", "utf-8"))
+
+        ports_to_try = [int(SMTP_PORT)]
+        if int(SMTP_PORT) == 465 and 587 not in ports_to_try:
+            ports_to_try.append(587)
+        elif int(SMTP_PORT) == 587 and 465 not in ports_to_try:
+            ports_to_try.append(465)
+
+        for port in ports_to_try:
+            try:
+                if port == 465:
+                    with smtplib.SMTP_SSL(SMTP_SERVER, port, timeout=10) as server:
+                        if SMTP_USERNAME and SMTP_PASSWORD:
+                            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                        server.send_message(msg)
+                else:
+                    with smtplib.SMTP(SMTP_SERVER, port, timeout=10) as server:
+                        server.starttls()
+                        if SMTP_USERNAME and SMTP_PASSWORD:
+                            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                        server.send_message(msg)
+                logging.info(f"📧 [EMAIL RESUMO SUCESSO] Briefing por e-mail enviado com sucesso para {ALERT_EMAIL_TO} (Porta {port}).")
+                return True
+            except Exception as p_err:
+                logging.warning(f"⚠️ SMTP na porta {port} falhou para e-mail resumo ({p_err})...")
+
+        # Fallback Resend API
+        resend_key = os.getenv("RESEND_API_KEY", "")
+        if resend_key:
+            try:
+                resp = requests.post(
+                    "https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+                    json={
+                        "from": from_header or "Trader AI <onboarding@resend.dev>",
+                        "to": [ALERT_EMAIL_TO],
+                        "subject": clean_subject,
+                        "html": html_content
+                    },
+                    timeout=10
+                )
+                if resp.status_code in [200, 201]:
+                    logging.info(f"📧 [EMAIL RESUMO SUCESSO] Briefing enviado via Resend HTTPS API para {ALERT_EMAIL_TO}.")
+                    return True
+            except Exception as r_err:
+                logging.warning(f"⚠️ Resend HTTPS API falhou para e-mail resumo: {r_err}")
+
+    except Exception as e:
+        logging.error(f"❌ Erro ao formatar ou enviar e-mail do Resumo Executivo: {e}")
+
+    return False
