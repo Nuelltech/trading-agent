@@ -62,17 +62,37 @@ EVENTO_PARA_MAPA: Dict[str, str] = {
 def load_mapas_transmissao_ids() -> Dict[str, str]:
     """
     Carrega o mapeamento {"Nome do Mapa": "page_id"} a partir do secret NOTION_MAPAS_TRANSMISSAO_IDS.
+    Suporta JSON com aspas duplas, aspas simples, ou blocos ```json.
     """
     raw_secret = os.getenv("NOTION_MAPAS_TRANSMISSAO_IDS", "").strip()
     if not raw_secret:
-        logging.warning("⚠️ Secret NOTION_MAPAS_TRANSMISSAO_IDS não configurado.")
+        logging.warning("⚠️ Secret NOTION_MAPAS_TRANSMISSAO_IDS não configurado (está vazio).")
         return {}
 
+    clean = raw_secret
+    if clean.startswith("```json"):
+        clean = clean.split("```json", 1)[1].rsplit("```", 1)[0].strip()
+    elif clean.startswith("```"):
+        clean = clean.split("```", 1)[1].rsplit("```", 1)[0].strip()
+    
+    if (clean.startswith("'") and clean.endswith("'")) or (clean.startswith('"') and clean.endswith('"')):
+        # Remover aspas exteriores se o secret foi envolto em aspas
+        if not (clean.startswith('{"') or clean.startswith("{'")):
+            clean = clean[1:-1].strip()
+
     try:
-        return json.loads(raw_secret)
-    except Exception as e:
-        logging.error(f"❌ Erro ao fazer parse do secret NOTION_MAPAS_TRANSMISSAO_IDS: {e}")
-        return {}
+        return json.loads(clean)
+    except Exception:
+        try:
+            fixed_json = clean.replace("'", '"')
+            return json.loads(fixed_json)
+        except Exception as e:
+            logging.error(
+                f"❌ Erro ao fazer parse do secret NOTION_MAPAS_TRANSMISSAO_IDS: {e}.\n"
+                "Formato correto para o secret no GitHub Actions:\n"
+                '{"Fed": "page_id", "NFP": "page_id", "CPI": "page_id", "PMI": "page_id", "BoJ": "page_id", "ECB": "page_id", "PCE": "page_id", "GDP": "page_id", "BoE": "page_id", "PBoC": "page_id", "RetailSales": "page_id"}'
+            )
+            return {}
 
 
 def fetch_camada0_context() -> Tuple[str, str]:
