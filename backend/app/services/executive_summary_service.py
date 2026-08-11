@@ -50,19 +50,23 @@ NOTION_HEADERS = {
 def get_active_tickers_from_mysql() -> List[str]:
     """
     REGRA RÍGIDA: Lê os tickers ativos dinamicamente da tabela indicators_catalog no MySQL.
-    NUNCA hardcoded.
+    NUNCA hardcoded. Inclui retentativas em caso de instabilidade de rede MySQL.
     """
-    try:
-        with engine.connect() as conn:
-            sql = text("SELECT ticker FROM indicators_catalog WHERE is_active = TRUE OR is_active IS NULL")
-            rows = conn.execute(sql).fetchall()
-            tickers = [str(r[0]).strip() for r in rows if r[0]]
-            if tickers:
-                logging.info(f"✅ [MYSQL LIVE] {len(tickers)} tickers ativos extraídos dinamicamente do indicators_catalog.")
-                return tickers
-    except Exception as e:
-        logging.error(f"❌ Erro ao consultar tickers ativos no MySQL: {e}")
+    for attempt in range(1, 4):
+        try:
+            with engine.connect() as conn:
+                sql = text("SELECT ticker FROM indicators_catalog WHERE is_active = TRUE OR is_active IS NULL")
+                rows = conn.execute(sql).fetchall()
+                tickers = [str(r[0]).strip() for r in rows if r[0]]
+                if tickers:
+                    logging.info(f"✅ [MYSQL LIVE] {len(tickers)} tickers ativos extraídos dinamicamente do indicators_catalog.")
+                    return tickers
+        except Exception as e:
+            logging.warning(f"⚠️ Tentativa {attempt}/3 falhou ao consultar tickers no MySQL ({e}). A tentar novamente em 3s...")
+            import time
+            time.sleep(3)
 
+    logging.error("❌ Falha permanente ao consultar tickers ativos no MySQL após 3 tentativas.")
     return []
 
 
