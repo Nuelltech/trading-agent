@@ -305,14 +305,25 @@ def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]
 
     # Criar nova página completa
     event_date = row.get("event_timestamp")
+    time_text = ""
     if isinstance(event_date, datetime):
-        date_str = event_date.strftime("%Y-%m-%d Distribution").replace(" Distribution", "") if event_date.hour == 0 and event_date.minute == 0 and event_date.second == 0 else event_date.strftime("%Y-%m-%dT%H:%M:%S")
+        if event_date.hour != 0 or event_date.minute != 0:
+            date_str = event_date.strftime("%Y-%m-%dT%H:%M:%S")
+            time_text = event_date.strftime("%H:%M UTC")
+        else:
+            date_str = event_date.strftime("%Y-%m-%d")
     elif event_date:
         es = str(event_date).strip()
         if " " in es:
             date_str = es.replace(" ", "T")
+            parts = es.split(" ")
+            if len(parts) > 1 and ":" in parts[1]:
+                time_text = f"{parts[1][:5]} UTC"
         elif "T" in es:
             date_str = es
+            parts = es.split("T")
+            if len(parts) > 1 and ":" in parts[1]:
+                time_text = f"{parts[1][:5]} UTC"
         else:
             date_str = es[:10]
     else:
@@ -332,6 +343,12 @@ def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]
 
     if date_str:
         full_props["Data"] = {"date": {"start": date_str}}
+
+    # Suporte flexível a coluna Hora / Horário no Notion
+    hora_prop = find_schema_prop_matching(schema, ["Hora", "Horário", "Hora de Lançamento"])
+    if time_text and hora_prop:
+        p_name, _ = hora_prop
+        full_props[p_name] = {"rich_text": _build_rich_text(time_text)}
 
     forecast_val = row.get("forecast_val")
     forecast_text = _format_value(forecast_val, row.get("unit", ""))
