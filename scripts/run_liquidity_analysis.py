@@ -28,15 +28,23 @@ from app.services.notion_anomalies_sync_service import sync_anomalies_quarantine
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def get_watchlist_for_analysis() -> list:
-    """Obtém dinamicamente todos os ativos ativos do indicators_catalog no MySQL com fallback."""
+    """Obtém dinamicamente todos os ativos OHLCV ativos do indicators_catalog no MySQL com fallback.
+    
+    Exclui séries FRED_API (ex: T10YIE, IRLTLT01ITM156N, VSTOXX) que não possuem
+    dados OHLCV — o motor de sweep necessita de pavio (high/low/open/close) para operar.
+    """
     try:
         from app.database import engine
         with engine.connect() as conn:
-            sql = text("SELECT ticker FROM indicators_catalog WHERE is_active = TRUE")
+            sql = text("""
+                SELECT ticker FROM indicators_catalog
+                WHERE is_active = TRUE
+                AND data_provider != 'FRED_API'
+            """)
             rows = conn.execute(sql).fetchall()
             if rows:
                 tickers = [r[0] for r in rows if r[0]]
-                logging.info(f"✅ Watchlist do Motor de Liquidez carregada dinamicamente da DB ({len(tickers)} ativos).")
+                logging.info(f"✅ Watchlist do Motor de Liquidez carregada da DB ({len(tickers)} ativos com OHLCV — séries FRED_API excluídas).")
                 return tickers
     except Exception as e:
         logging.warning(f"⚠️ Erro ao consultar indicators_catalog na DB ({e}). Usando lista fallback...")
