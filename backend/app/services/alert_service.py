@@ -9,7 +9,7 @@ O sistema NUNCA executa ordens de forma autónoma. O output máximo é um alerta
 
 import os
 import logging
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, Any
 from datetime import datetime, timedelta
 import requests
 from sqlalchemy import text
