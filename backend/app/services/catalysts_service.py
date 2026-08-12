@@ -357,8 +357,21 @@ def validar_previsao_pos_evento(event_row: Dict[str, Any]) -> Optional[str]:
     event_timestamp = event_row.get("event_timestamp")
     event_id = event_row.get("id")
 
-    if actual_val is None or forecast_val is None or not previsao_cond:
+    if actual_val is None or forecast_val is None:
         return None
+
+    # Se a previsão condicional não veio na row dict do MySQL, usar tese padrão por tipo de evento
+    if not previsao_cond:
+        event_name = str(event_row.get("event_name", ""))
+        mapa_cat = EVENTO_PARA_MAPA.get(event_name, "")
+        if "CPI" in mapa_cat or "CPI" in event_name or "PCE" in mapa_cat:
+            previsao_cond = "Se a inflação sair acima do projetado, DXY sobe e yields sobem; se abaixo, DXY cai e ouro sobe."
+        elif "Fed" in mapa_cat or "ECB" in mapa_cat or "BoE" in mapa_cat:
+            previsao_cond = "Se as taxas sobem acima do projetado, DXY e yields sobem."
+        elif "NFP" in mapa_cat or "Retail" in mapa_cat or "GDP" in mapa_cat:
+            previsao_cond = "Se o indicador sair acima do projetado, DXY sobe."
+        else:
+            previsao_cond = "Se o indicador sair acima do projetado, DXY sobe."
 
     try:
         diff = float(actual_val) - float(forecast_val)
