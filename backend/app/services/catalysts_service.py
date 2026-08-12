@@ -345,41 +345,105 @@ def _write_catalyst_fields_to_notion(
 # -----------------------------------------------------------------------------
 def validar_previsao_pos_evento(event_row: Dict[str, Any]) -> Optional[str]:
     """
-    Executa a validação mecânica pós-evento quando actual_val é lido para um evento com previsao_condicional.
+    TAREFA 3 — VALIDAÇÃO RETROSPETIVA COMPLETA (MECÂNICA, VERIFICAÇÃO DE MERCADO REAL)
+    
+    Verifica se a reação real do mercado (preços em indicator_values: DXY, Ouro, Yields)
+    correspondeu à previsão condicional elaborada para o evento.
     Retorna 'Acertou', 'Errou' ou 'Parcial' e grava na coluna 'Validação Pós-Evento' no Notion.
     """
     actual_val = event_row.get("actual_val")
     forecast_val = event_row.get("forecast_val")
-    previsao_cond = event_row.get("previsao_condicional")
+    previsao_cond = event_row.get("previsao_condicional", "")
+    event_timestamp = event_row.get("event_timestamp")
+    event_id = event_row.get("id")
 
     if actual_val is None or forecast_val is None or not previsao_cond:
         return None
 
     try:
         diff = float(actual_val) - float(forecast_val)
-        direcao_real = "acima" if diff > 0 else ("abaixo" if diff < 0 else "em linha")
-        
-        # Leitura simples de direção
-        # Regressa 'Acertou' / 'Errou' / 'Parcial' com base na coerência de direção
+        macro_outcome = "acima" if diff > 0 else ("abaixo" if diff < 0 else "em linha")
+
+        # 1. Obter a data do evento
+        event_date_str = None
+        if isinstance(event_timestamp, datetime):
+            event_date_str = event_timestamp.strftime("%Y-%m-%d")
+        elif event_timestamp:
+            event_date_str = str(event_timestamp).split(" ")[0].split("T")[0]
+
+        # 2. Consultar variação real dos ativos de referência na DB MySQL (DXY, Ouro, Yields, S&P500)
+        asset_changes = {}
+        if event_date_str:
+            try:
+                from app.database import engine
+                with engine.connect() as conn:
+                    sql_assets = text("""
+                        SELECT symbol, open_val, value
+                        FROM indicator_values
+                        WHERE DATE(timestamp) = :edate
+                          AND symbol IN ('DX-Y.NYB', 'GC=F', '^TNX', '^GSPC')
+                    """)
+                    rows = conn.execute(sql_assets, {"edate": event_date_str}).fetchall()
+                    for r in rows:
+                        sym, open_v, close_v = r[0], float(r[1] or 0), float(r[2] or 0)
+                        if open_v > 0:
+                            pct_var = ((close_v - open_v) / open_v) * 100.0
+                            asset_changes[sym] = pct_var
+            except Exception as db_err:
+                logging.warning(f"⚠️ Erro ao obter cotações de ativos para validação retrospetiva: {db_err}")
+
+        # 3. Avaliar Coerência entre a Tese da Previsão Condicional e a Reação de Mercado Real
+        # Se a macro saiu 'acima', mas o DXY caiu / Ouro subiu forte (comportamento inverso ao previsto para DXY/Yields sobem) -> Errou
+        dxy_var = asset_changes.get("DX-Y.NYB", 0.0)
+        gold_var = asset_changes.get("GC=F", 0.0)
+        tnx_var = asset_changes.get("^TNX", 0.0)
+
         validacao = "Parcial"
-        if direcao_real == "acima" and "acima" in previsao_cond.lower():
-            validacao = "Acertou"
-        elif direcao_real == "abaixo" and "abaixo" in previsao_cond.lower():
-            validacao = "Acertou"
-        elif direcao_real == "em linha":
+        cond_text = previsao_cond.lower()
+
+        # Se a tese previa subida do dólar/yields quando a macro saísse acima, mas o mercado reagiu com queda do dólar/alta do ouro
+        if macro_outcome == "acima":
+            if "dxy sobe" in cond_text or "dólar sobe" in cond_text or "yields sobem" in cond_text or "pressão" in cond_text:
+                if dxy_var < -0.05 or gold_var > 0.5:
+                    # Ouro subiu forte ou DXY caiu -> Tese de mercado FALHOU
+                    validacao = "Errou"
+                else:
+                    validacao = "Acertou"
+            elif "abaixo" in cond_text:
+                validacao = "Errou"
+            else:
+                validacao = "Parcial"
+        elif macro_outcome == "abaixo":
+            if "dxy cai" in cond_text or "dólar cai" in cond_text or "ouro sobe" in cond_text:
+                if dxy_var > 0.1 or gold_var < -0.5:
+                    validacao = "Errou"
+                else:
+                    validacao = "Acertou"
+            elif "acima" in cond_text:
+                validacao = "Errou"
+            else:
+                validacao = "Parcial"
+        else:  # em linha
             validacao = "Parcial"
-        else:
-            validacao = "Errou"
 
-        logging.info(f"🎯 [VALIDAÇÃO RETROSPETIVA] Evento '{event_row.get('event_name')}': Real={actual_val} vs Projetado={forecast_val} ({direcao_real}) -> Validação: {validacao}")
+        logging.info(
+            f"🎯 [VALIDAÇÃO RETROSPETIVA DE MERCADO] Evento '{event_row.get('event_name')}': "
+            f"Macro={macro_outcome} (Real={actual_val} vs Forecast={forecast_val}) | "
+            f"Reação Real Ativos (DXY={dxy_var:+.2f}%, Gold={gold_var:+.2f}%, TNX={tnx_var:+.2f}%) -> Validação: {validacao}"
+        )
 
-        # Atualizar no Notion
-        from app.services.notion_calendar_sync_service import _notion_find_existing_page, _build_rich_text
-        page_id = _notion_find_existing_page(event_row["id"], "economic_calendar")
-        if page_id:
-            url_patch = f"https://api.notion.com/v1/pages/{page_id}"
-            props = {"Validação Pós-Evento": {"select": {"name": validacao}}}
-            requests.patch(url_patch, headers=NOTION_HEADERS, json={"properties": props}, timeout=10)
+        # 4. Atualizar no Notion
+        if event_id:
+            try:
+                from app.services.notion_calendar_sync_service import _notion_find_existing_page
+                page_id = _notion_find_existing_page(event_id, "economic_calendar")
+                if page_id:
+                    url_patch = f"https://api.notion.com/v1/pages/{page_id}"
+                    props = {"Validação Pós-Evento": {"select": {"name": validacao}}}
+                    requests.patch(url_patch, headers=NOTION_HEADERS, json={"properties": props}, timeout=10)
+                    logging.info(f"✅ Notion atualizado para página {page_id}: Validação Pós-Evento = '{validacao}'")
+            except Exception as notion_err:
+                logging.warning(f"⚠️ Erro ao atualizar Notion para validação: {notion_err}")
 
         return validacao
     except Exception as e:
