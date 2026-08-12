@@ -329,6 +329,38 @@ def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]
         p_name, _ = real_prop
         update_props[p_name] = {"rich_text": _build_rich_text(real_text)}
 
+    # 3. Campos "Validação Pós-Evento", "Mecanismo Aplicável", "Previsão Condicional"
+    validacao_prop = find_schema_prop_matching(schema, ["Validação Pós-Evento", "Validação", "Resultado Validação"])
+    mecanismo_prop = find_schema_prop_matching(schema, ["Mecanismo Aplicável", "Mecanismo"])
+    previsao_cond_prop = find_schema_prop_matching(schema, ["Previsão Condicional", "Tese Condicional"])
+
+    # Se a leitura real existe, executar a Tarefa 3 e obter o resultado da validação
+    validacao_res = None
+    if real_val is not None:
+        try:
+            from app.services.catalysts_service import validar_previsao_pos_evento
+            validacao_res = validar_previsao_pos_evento(row)
+        except Exception as val_err:
+            logging.warning(f"⚠️ Erro ao calcular Tarefa 3 para {row.get('event_name')}: {val_err}")
+
+    if validacao_res and validacao_prop:
+        p_name, p_type = validacao_prop
+        if p_type == "select":
+            update_props[p_name] = {"select": {"name": validacao_res}}
+        else:
+            update_props[p_name] = {"rich_text": _build_rich_text(validacao_res)}
+
+    if row.get("mecanismo_aplicavel") and mecanismo_prop:
+        p_name, p_type = mecanismo_prop
+        if p_type == "select":
+            update_props[p_name] = {"select": {"name": str(row["mecanismo_aplicavel"])}}
+        else:
+            update_props[p_name] = {"rich_text": _build_rich_text(str(row["mecanismo_aplicavel"]))}
+
+    if row.get("previsao_condicional") and previsao_cond_prop:
+        p_name, p_type = previsao_cond_prop
+        update_props[p_name] = {"rich_text": _build_rich_text(str(row["previsao_condicional"]))}
+
     previous_val = row.get("previous_val")
     previous_text = _format_value(previous_val, row.get("unit", ""))
     if previous_val is not None:
@@ -339,12 +371,6 @@ def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]
     if existing_page_id:
         if update_props:
             success = _notion_update_page(existing_page_id, update_props)
-            if real_val is not None:
-                try:
-                    from app.services.catalysts_service import validar_previsao_pos_evento
-                    validar_previsao_pos_evento(row)
-                except Exception as val_err:
-                    logging.warning(f"⚠️ Erro ao acionar Tarefa 3 em upsert: {val_err}")
             return "updated" if success else "error"
         return "skipped"
 
@@ -450,7 +476,7 @@ def calculate_earnings_trends(symbol: str, current_event_date: Any, current_peri
     return trends
 
 
-def upsert_earnings_event(row: Dict[str, Any]) -> str:
+def upsert_earnings_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]] = None) -> str:
     """
     Upsert de um earnings corporativo (corporate_earnings_calendar) no Notion.
     Devolve 'created', 'updated' ou 'error'.
@@ -458,6 +484,8 @@ def upsert_earnings_event(row: Dict[str, Any]) -> str:
     mysql_id = row["id"]
     tabela_origem = "corporate_earnings_calendar"
     symbol = str(row.get("symbol") or "")
+    if not schema:
+        schema = get_notion_calendar_schema() or DEFAULT_CALENDAR_SCHEMA
 
     existing_page_id = _notion_find_existing_page(mysql_id, tabela_origem)
 
@@ -471,14 +499,24 @@ def upsert_earnings_event(row: Dict[str, Any]) -> str:
     if row.get("revenue_actual") is not None:
         update_props["Receita Real"] = {"number": float(row["revenue_actual"])}
 
-    if trends["eps_qoq"] is not None:
-        update_props["EPS Trimestre Anterior (QoQ)"] = {"number": trends["eps_qoq"]}
-    if trends["eps_yoy"] is not None:
-        update_props["EPS Mesmo Trimestre Ano Anterior (YoY)"] = {"number": trends["eps_yoy"]}
-    if trends["revenue_qoq"] is not None:
-        update_props["Receita Trimestre Anterior (QoQ)"] = {"number": trends["revenue_qoq"]}
-    if trends["revenue_yoy"] is not None:
-        update_props["Receita Mesmo Trimestre Ano Anterior (YoY)"] = {"number": trends["revenue_yoy"]}
+    # Mapear dinamicamente os 4 campos de tendência respeitando o schema do Notion (rich_text vs number)
+    trend_mappings = [
+        ("eps_qoq", ["EPS Trimestre Anterior (QoQ)", "EPS QoQ"]),
+        ("eps_yoy", ["EPS Mesmo Trimestre Ano Anterior (YoY)", "EPS YoY"]),
+        ("revenue_qoq", ["Receita Trimestre Anterior (QoQ)", "Receita QoQ"]),
+        ("revenue_yoy", ["Receita Mesmo Trimestre Ano Anterior (YoY)", "Receita YoY"])
+    ]
+    for key, candidates in trend_mappings:
+        val = trends.get(key)
+        if val is not None:
+            prop_info = find_schema_prop_matching(schema, candidates)
+            if prop_info:
+                p_name, p_type = prop_info
+                fmt_str = f"{val:+.2f}%"
+                if p_type == "number":
+                    update_props[p_name] = {"number": float(val)}
+                else:
+                    update_props[p_name] = {"rich_text": _build_rich_text(fmt_str)}
 
     if existing_page_id:
         if update_props:
