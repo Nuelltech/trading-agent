@@ -363,7 +363,7 @@ def get_active_watchlist_map() -> Dict[str, str]:
     Se o nome estiver vazio na tabela Notion, usa o fallback de DEFAULT_TICKER_NAMES.
     """
     if not NOTION_TOKEN:
-        logging.error("❌ NOTION_TOKEN não configurado.")
+        logging.error("❌ NOTION_TOKEN (ou NOTION_API_KEY) não configurado.")
         return dict(DEFAULT_TICKER_NAMES)
 
     url = f"https://api.notion.com/v1/databases/{NOTION_CONFIG_DB_ID}/query"
@@ -620,7 +620,7 @@ def run_news_collection(backfill: bool = False) -> Dict[str, int]:
     Pipeline completo de recolha de notícias via Yahoo Finance RSS.
     """
     if not NOTION_TOKEN:
-        logging.error("❌ NOTION_TOKEN não definido. Abortando recolha de notícias.")
+        logging.error("❌ NOTION_TOKEN (ou NOTION_API_KEY) não definido. Abortando recolha de notícias.")
         return {"inserted": 0, "skipped": 0, "errors": 0}
 
     hoje = datetime.now(timezone.utc)
