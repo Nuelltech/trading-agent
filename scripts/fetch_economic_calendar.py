@@ -50,7 +50,7 @@ OFFICIAL_REAL_SCHEDULE_2026 = [
     {"event_name": "US Non-Farm Payrolls (NFP)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-07 12:30:00", "impact_level": "HIGH", "actual_val": 114.0, "forecast_val": 185.0, "previous_val": 206.0, "unit": "K", "source_provider": "BLS_OFFICIAL"},
     {"event_name": "US Unemployment Rate", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-07 12:30:00", "impact_level": "HIGH", "actual_val": 4.3, "forecast_val": 4.1, "previous_val": 4.1, "unit": "%", "source_provider": "BLS_OFFICIAL"},
     {"event_name": "US Initial Jobless Claims", "country": "EUA", "currency": "USD", "event_timestamp": "2026-07-30 12:30:00", "impact_level": "MEDIUM", "actual_val": 249.0, "forecast_val": 236.0, "previous_val": 238.0, "unit": "K", "source_provider": "DOL_OFFICIAL"},
-    {"event_name": "US Retail Sales (MoM)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-14 12:30:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 0.3, "previous_val": 0.0, "unit": "%", "source_provider": "CENSUS_OFFICIAL"},
+    {"event_name": "US Retail Sales (MoM)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-14 12:30:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 0.3, "previous_val": 0.2, "unit": "%", "source_provider": "CENSUS_OFFICIAL"},
     {"event_name": "CB Consumer Confidence", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-25 14:00:00", "impact_level": "MEDIUM", "actual_val": None, "forecast_val": 101.0, "previous_val": 100.4, "unit": "Index", "source_provider": "CB_OFFICIAL"},
     
     # EUA - PMIs, PIB & Imobiliário (Filtro Realty Income O)
