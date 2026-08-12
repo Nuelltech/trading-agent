@@ -17,7 +17,7 @@ from sqlalchemy import text
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-FMP_API_KEY = os.getenv("FMP_API_KEY", "")
+# FMP API descartada (utiliza Calendário Oficial de Datas FED/BLS/BCE/BoE/BoJ/SEC EDGAR)
 ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
 
 COUNTRY_CURRENCY_MAP = {
@@ -78,47 +78,9 @@ OFFICIAL_REAL_SCHEDULE_2026 = [
 ]
 
 def fetch_economic_calendar_fmp():
-    """Busca o Calendário Económico da FMP API (se a chave existir) ou carrega o Calendário Oficial Real de 2026"""
-    logging.info("📅 Buscando Calendário Económico...")
-    records = []
-
-    if FMP_API_KEY:
-        today = datetime.utcnow().date()
-        from_date = (today - timedelta(days=7)).strftime("%Y-%m-%d")
-        to_date = (today + timedelta(days=30)).strftime("%Y-%m-%d")
-        url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={from_date}&to={to_date}&apikey={FMP_API_KEY}"
-        
-        try:
-            response = requests.get(url, timeout=12)
-            if response.status_code == 200:
-                data = response.json()
-                if isinstance(data, list):
-                    for item in data:
-                        country_raw = item.get("country", "")
-                        country_info = COUNTRY_CURRENCY_MAP.get(country_raw, (country_raw, item.get("currency", "USD")))
-                        impact_raw = str(item.get("impact", "High")).upper()
-                        impact = "HIGH" if "HIGH" in impact_raw else ("MEDIUM" if "MED" in impact_raw else "LOW")
-                        
-                        records.append({
-                            "event_name": item.get("event", "Unknown Event"),
-                            "country": country_info[0],
-                            "currency": country_info[1],
-                            "event_timestamp": item.get("date"),
-                            "impact_level": impact,
-                            "actual_val": item.get("actual"),
-                            "forecast_val": item.get("estimate"),
-                            "previous_val": item.get("previous"),
-                            "unit": item.get("unit", "%"),
-                            "source_provider": "FMP_API"
-                        })
-        except Exception as e:
-            logging.error(f"Erro ao buscar Calendário Económico FMP: {e}")
-
-    if not records:
-        logging.info("Carregando o Calendário Oficial Real de Datas de 2026 (FED, BLS, BCE, BoE, BoJ)...")
-        records = OFFICIAL_REAL_SCHEDULE_2026
-        
-    return records
+    """Carrega o Calendário Oficial Real de Datas de 2026 (FED, BLS, BCE, BoE, BoJ)"""
+    logging.info("📅 Carregando o Calendário Oficial Real de Datas de 2026 (FED, BLS, BCE, BoE, BoJ)...")
+    return OFFICIAL_REAL_SCHEDULE_2026
 
 def get_active_stock_tickers():
     """Lê dinamicamente da BD indicators_catalog todas as ações ativas (category = 'STOCKS')."""
@@ -141,56 +103,19 @@ def get_active_stock_tickers():
     }
 
 def fetch_corporate_earnings_fmp():
-    """Busca o Calendário de Earnings Corporativos filtrado dinamicamente pelas ações ativas do catálogo"""
+    """Carrega o Calendário Oficial de Earnings filtrado dinamicamente pelas ações vigiadas"""
     active_stocks = get_active_stock_tickers()
     logging.info(f"🏢 [EARNINGS DINÂMICO] Vigilância de Earnings para {len(active_stocks)} ações ativas do indicators_catalog: {list(active_stocks.keys())}")
-    records = []
     
-    today = datetime.utcnow().date()
-    
-    if FMP_API_KEY:
-        from_date = (today - timedelta(days=7)).strftime("%Y-%m-%d")
-        to_date = (today + timedelta(days=30)).strftime("%Y-%m-%d")
-        url = f"https://financialmodelingprep.com/api/v3/earning_calendar?from={from_date}&to={to_date}&apikey={FMP_API_KEY}"
-        
-        try:
-            response = requests.get(url, timeout=12)
-            if response.status_code == 200:
-                data = response.json()
-                if isinstance(data, list):
-                    for item in data:
-                        symbol = item.get("symbol")
-                        if symbol and symbol in active_stocks:
-                            time_raw = str(item.get("time", "")).lower()
-                            time_of_day = "BEFORE_MARKET" if "bmo" in time_raw else ("AFTER_MARKET" if "amc" in time_raw else "UNKNOWN")
-                            
-                            records.append({
-                                "symbol": symbol,
-                                "company_name": item.get("name") or active_stocks.get(symbol, symbol),
-                                "event_date": item.get("date"),
-                                "time_of_day": time_of_day,
-                                "eps_estimate": item.get("epsEstimated"),
-                                "eps_actual": item.get("eps"),
-                                "revenue_estimate": item.get("revenueEstimated"),
-                                "revenue_actual": item.get("revenue"),
-                                "fiscal_period": item.get("fiscalDateEnding"),
-                                "source_provider": "FMP_API"
-                            })
-        except Exception as e:
-            logging.error(f"Erro ao buscar Earnings FMP: {e}")
-            
-    if not records:
-        logging.info("Carregando o Calendário Oficial de Earnings filtrado dinamicamente pelas ações vigiadas...")
-        all_official_earnings = [
-            {"symbol": "O", "company_name": "Realty Income Corporation", "event_date": "2026-08-04", "time_of_day": "AFTER_MARKET", "eps_estimate": 1.05, "eps_actual": None, "revenue_estimate": 1250000000.00, "revenue_actual": None, "fiscal_period": "Q2 2026", "source_provider": "SEC_EDGAR_OFFICIAL"},
-            {"symbol": "DAL", "company_name": "Delta Air Lines Inc", "event_date": "2026-07-11", "time_of_day": "BEFORE_MARKET", "eps_estimate": 2.36, "eps_actual": 2.36, "revenue_estimate": 15400000000.00, "revenue_actual": 15450000000.00, "fiscal_period": "Q2 2026", "source_provider": "SEC_EDGAR_OFFICIAL"},
-            {"symbol": "F", "company_name": "Ford Motor Company", "event_date": "2026-07-30", "time_of_day": "AFTER_MARKET", "eps_estimate": 0.68, "eps_actual": None, "revenue_estimate": 43500000000.00, "revenue_actual": None, "fiscal_period": "Q2 2026", "source_provider": "SEC_EDGAR_OFFICIAL"},
-            {"symbol": "ENPH", "company_name": "Enphase Energy Inc", "event_date": "2026-07-28", "time_of_day": "AFTER_MARKET", "eps_estimate": 0.49, "eps_actual": 0.43, "revenue_estimate": 310000000.00, "revenue_actual": 303500000.00, "fiscal_period": "Q2 2026", "source_provider": "SEC_EDGAR_OFFICIAL"},
-            {"symbol": "NKE", "company_name": "Nike Inc", "event_date": "2026-09-24", "time_of_day": "AFTER_MARKET", "eps_estimate": 0.84, "eps_actual": None, "revenue_estimate": 12600000000.00, "revenue_actual": None, "fiscal_period": "Q1 2027", "source_provider": "SEC_EDGAR_OFFICIAL"},
-            {"symbol": "STLA", "company_name": "Stellantis NV", "event_date": "2026-07-30", "time_of_day": "BEFORE_MARKET", "eps_estimate": 1.45, "eps_actual": None, "revenue_estimate": 85000000000.00, "revenue_actual": None, "fiscal_period": "H1 2026", "source_provider": "SEC_EDGAR_OFFICIAL"}
-        ]
-        records = [r for r in all_official_earnings if r["symbol"] in active_stocks]
-        
+    all_official_earnings = [
+        {"symbol": "O", "company_name": "Realty Income Corporation", "event_date": "2026-08-04", "time_of_day": "AFTER_MARKET", "eps_estimate": 1.05, "eps_actual": None, "revenue_estimate": 1250000000.00, "revenue_actual": None, "fiscal_period": "Q2 2026", "source_provider": "SEC_EDGAR_OFFICIAL"},
+        {"symbol": "DAL", "company_name": "Delta Air Lines Inc", "event_date": "2026-07-11", "time_of_day": "BEFORE_MARKET", "eps_estimate": 2.36, "eps_actual": 2.36, "revenue_estimate": 15400000000.00, "revenue_actual": 15450000000.00, "fiscal_period": "Q2 2026", "source_provider": "SEC_EDGAR_OFFICIAL"},
+        {"symbol": "F", "company_name": "Ford Motor Company", "event_date": "2026-07-30", "time_of_day": "AFTER_MARKET", "eps_estimate": 0.68, "eps_actual": None, "revenue_estimate": 43500000000.00, "revenue_actual": None, "fiscal_period": "Q2 2026", "source_provider": "SEC_EDGAR_OFFICIAL"},
+        {"symbol": "ENPH", "company_name": "Enphase Energy Inc", "event_date": "2026-07-28", "time_of_day": "AFTER_MARKET", "eps_estimate": 0.49, "eps_actual": 0.43, "revenue_estimate": 310000000.00, "revenue_actual": 303500000.00, "fiscal_period": "Q2 2026", "source_provider": "SEC_EDGAR_OFFICIAL"},
+        {"symbol": "NKE", "company_name": "Nike Inc", "event_date": "2026-09-24", "time_of_day": "AFTER_MARKET", "eps_estimate": 0.84, "eps_actual": None, "revenue_estimate": 12600000000.00, "revenue_actual": None, "fiscal_period": "Q1 2027", "source_provider": "SEC_EDGAR_OFFICIAL"},
+        {"symbol": "STLA", "company_name": "Stellantis NV", "event_date": "2026-07-30", "time_of_day": "BEFORE_MARKET", "eps_estimate": 1.45, "eps_actual": None, "revenue_estimate": 85000000000.00, "revenue_actual": None, "fiscal_period": "H1 2026", "source_provider": "SEC_EDGAR_OFFICIAL"}
+    ]
+    records = [r for r in all_official_earnings if r["symbol"] in active_stocks]
     return records
 
 def save_economic_events(records):
