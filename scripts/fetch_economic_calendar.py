@@ -17,8 +17,9 @@ from sqlalchemy import text
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# FMP API descartada (utiliza Calendário Oficial de Datas FED/BLS/BCE/BoE/BoJ/SEC EDGAR)
+# FMP API descartada (utiliza Calendário Oficial de Datas FED/BLS/BCE/BoE/BoJ/SEC EDGAR + FRED/Alpha Vantage para actual_val)
 ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
+FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 
 COUNTRY_CURRENCY_MAP = {
     "US": ("EUA", "USD"),
@@ -77,10 +78,52 @@ OFFICIAL_REAL_SCHEDULE_2026 = [
     {"event_name": "PBoC LPR 1-Year Rate Decision", "country": "China", "currency": "CNY", "event_timestamp": "2026-08-20 01:15:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 3.45, "previous_val": 3.45, "unit": "%", "source_provider": "PBOC_OFFICIAL"}
 ]
 
+def enrich_macro_actuals_via_apis(records: list) -> list:
+    """
+    Enriquece automaticamente os registos do calendário que possuem actual_val = None
+    através da FRED API ou Alpha Vantage API.
+    """
+    if not records:
+        return records
+
+    # FRED Series Mappings para indicadores Macro principais
+    fred_series_map = {
+        "US CPI (YoY)": ("CPIAUCSL", "pc1"),         # Percent change 1 year
+        "US Core CPI (MoM)": ("CPILFESL", "pch"),      # Percent change 1 month
+        "US Unemployment Rate": ("UNRATE", None),      # Percent direto
+        "US Non-Farm Payrolls (NFP)": ("PAYEMS", "chg"),# Absolute change (k)
+        "US Initial Jobless Claims": ("ICSA", None),    # Claims count
+        "Fed Interest Rate Decision": ("FEDFUNDS", None)
+    }
+
+    if FRED_API_KEY:
+        for rec in records:
+            if rec.get("actual_val") is not None:
+                continue
+            event_name = rec.get("event_name", "")
+            if event_name in fred_series_map:
+                series_id, units = fred_series_map[event_name]
+                try:
+                    units_param = f"&units={units}" if units else ""
+                    url = f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}&api_key={FRED_API_KEY}&file_type=json&sort_order=desc&limit=1{units_param}"
+                    res = requests.get(url, timeout=8)
+                    if res.status_code == 200:
+                        obs = res.json().get("observations", [])
+                        if obs and obs[0].get("value") != ".":
+                            val = float(obs[0]["value"])
+                            rec["actual_val"] = val
+                            rec["source_provider"] = "FRED_API"
+                            logging.info(f"⚡ [FRED AUTOMÁTICO] {event_name}: actual_val={val} capturado automaticamente da FRED API")
+                except Exception as e:
+                    logging.warning(f"⚠️ Erro ao consultar FRED API para {event_name}: {e}")
+
+    return records
+
 def fetch_economic_calendar_fmp():
-    """Carrega o Calendário Oficial Real de Datas de 2026 (FED, BLS, BCE, BoE, BoJ)"""
+    """Carrega o Calendário Oficial Real de Datas de 2026 (FED, BLS, BCE, BoE, BoJ) e enriquece com APIs"""
     logging.info("📅 Carregando o Calendário Oficial Real de Datas de 2026 (FED, BLS, BCE, BoE, BoJ)...")
-    return OFFICIAL_REAL_SCHEDULE_2026
+    records = list(OFFICIAL_REAL_SCHEDULE_2026)
+    return enrich_macro_actuals_via_apis(records)
 
 def get_active_stock_tickers():
     """Lê dinamicamente da BD indicators_catalog todas as ações ativas (category = 'STOCKS')."""
