@@ -339,6 +339,12 @@ def upsert_economic_event(row: Dict[str, Any], schema: Dict[str, Tuple[str, str]
     if existing_page_id:
         if update_props:
             success = _notion_update_page(existing_page_id, update_props)
+            if real_val is not None:
+                try:
+                    from app.services.catalysts_service import validar_previsao_pos_evento
+                    validar_previsao_pos_evento(row)
+                except Exception as val_err:
+                    logging.warning(f"⚠️ Erro ao acionar Tarefa 3 em upsert: {val_err}")
             return "updated" if success else "error"
         return "skipped"
 
