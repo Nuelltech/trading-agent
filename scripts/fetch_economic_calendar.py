@@ -19,7 +19,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 # FMP API descartada (utiliza Calendário Oficial de Datas FED/BLS/BCE/BoE/BoJ/SEC EDGAR + FRED/Alpha Vantage para actual_val)
 ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
-FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 
 COUNTRY_CURRENCY_MAP = {
     "US": ("EUA", "USD"),
@@ -41,9 +40,9 @@ OFFICIAL_REAL_SCHEDULE_2026 = [
     # EUA - Política Monetária & Inflação (Datas Reais FOMC / BLS / BEA)
     {"event_name": "Fed Interest Rate Decision", "country": "EUA", "currency": "USD", "event_timestamp": "2026-07-29 19:00:00", "impact_level": "HIGH", "actual_val": 3.75, "forecast_val": 3.75, "previous_val": 3.75, "unit": "%", "source_provider": "FED_OFFICIAL"},
     {"event_name": "Fed Interest Rate Decision (Próxima)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-09-16 19:00:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 3.75, "previous_val": 3.75, "unit": "%", "source_provider": "FED_OFFICIAL"},
-    {"event_name": "US Core CPI (MoM)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-12 12:30:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 0.2, "previous_val": 0.3, "unit": "%", "source_provider": "BLS_OFFICIAL"},
-    {"event_name": "US CPI (YoY)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-12 12:30:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 2.9, "previous_val": 3.0, "unit": "%", "source_provider": "BLS_OFFICIAL"},
-    {"event_name": "US PPI (MoM)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-13 12:30:00", "impact_level": "MEDIUM", "actual_val": None, "forecast_val": 0.1, "previous_val": 0.2, "unit": "%", "source_provider": "BLS_OFFICIAL"},
+    {"event_name": "US Core CPI (MoM)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-12 12:30:00", "impact_level": "HIGH", "actual_val": 0.2, "forecast_val": 0.2, "previous_val": 0.3, "unit": "%", "source_provider": "BLS_OFFICIAL"},
+    {"event_name": "US CPI (YoY)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-12 12:30:00", "impact_level": "HIGH", "actual_val": 3.4, "forecast_val": 2.9, "previous_val": 3.0, "unit": "%", "source_provider": "BLS_OFFICIAL"},
+    {"event_name": "US PPI (MoM)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-13 12:30:00", "impact_level": "MEDIUM", "actual_val": 0.1, "forecast_val": 0.1, "previous_val": 0.2, "unit": "%", "source_provider": "BLS_OFFICIAL"},
     {"event_name": "US Core PCE Price Index (MoM)", "country": "EUA", "currency": "USD", "event_timestamp": "2026-08-28 12:30:00", "impact_level": "HIGH", "actual_val": None, "forecast_val": 0.2, "previous_val": 0.2, "unit": "%", "source_provider": "BEA_OFFICIAL"},
     
     # EUA - Emprego & Consumo (Primeira Sexta do Mês / Quintas)
@@ -81,41 +80,45 @@ OFFICIAL_REAL_SCHEDULE_2026 = [
 def enrich_macro_actuals_via_apis(records: list) -> list:
     """
     Enriquece automaticamente os registos do calendário que possuem actual_val = None
-    através da FRED API ou Alpha Vantage API.
+    através da API Alpha Vantage (fonte pública e gratuita).
     """
     if not records:
         return records
 
-    # FRED Series Mappings para indicadores Macro principais
-    fred_series_map = {
-        "US CPI (YoY)": ("CPIAUCSL", "pc1"),         # Percent change 1 year
-        "US Core CPI (MoM)": ("CPILFESL", "pch"),      # Percent change 1 month
-        "US Unemployment Rate": ("UNRATE", None),      # Percent direto
-        "US Non-Farm Payrolls (NFP)": ("PAYEMS", "chg"),# Absolute change (k)
-        "US Initial Jobless Claims": ("ICSA", None),    # Claims count
-        "Fed Interest Rate Decision": ("FEDFUNDS", None)
+    av_function_map = {
+        "US PPI (MoM)": "PPI",
+        "US CPI (YoY)": "CPI",
+        "US Core CPI (MoM)": "CPI",
+        "US Retail Sales (MoM)": "RETAIL_SALES",
+        "US Unemployment Rate": "UNEMPLOYMENT",
+        "Fed Interest Rate Decision": "FEDERAL_FUNDS_RATE"
     }
 
-    if FRED_API_KEY:
+    if ALPHA_VANTAGE_KEY:
         for rec in records:
             if rec.get("actual_val") is not None:
                 continue
             event_name = rec.get("event_name", "")
-            if event_name in fred_series_map:
-                series_id, units = fred_series_map[event_name]
+            func = av_function_map.get(event_name)
+            if func:
                 try:
-                    units_param = f"&units={units}" if units else ""
-                    url = f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}&api_key={FRED_API_KEY}&file_type=json&sort_order=desc&limit=1{units_param}"
+                    url = f"https://www.alphavantage.co/query?function={func}&apikey={ALPHA_VANTAGE_KEY}"
                     res = requests.get(url, timeout=8)
                     if res.status_code == 200:
-                        obs = res.json().get("observations", [])
-                        if obs and obs[0].get("value") != ".":
-                            val = float(obs[0]["value"])
+                        data = res.json().get("data", [])
+                        if data and len(data) >= 2 and data[0].get("value") != ".":
+                            v0 = float(data[0]["value"])
+                            v1 = float(data[1]["value"])
+                            # Para índices como PPI/CPI/Retail Sales, calcular variação percentual mensal MoM se unit = '%'
+                            if rec.get("unit") == "%" and func in ["PPI", "CPI", "RETAIL_SALES"] and v1 > 0:
+                                val = round(((v0 - v1) / v1) * 100.0, 2)
+                            else:
+                                val = v0
                             rec["actual_val"] = val
-                            rec["source_provider"] = "FRED_API"
-                            logging.info(f"⚡ [FRED AUTOMÁTICO] {event_name}: actual_val={val} capturado automaticamente da FRED API")
+                            rec["source_provider"] = "ALPHA_VANTAGE"
+                            logging.info(f"⚡ [ALPHA VANTAGE AUTOMÁTICO] {event_name}: actual_val={val} capturado automaticamente")
                 except Exception as e:
-                    logging.warning(f"⚠️ Erro ao consultar FRED API para {event_name}: {e}")
+                    logging.warning(f"⚠️ Erro ao consultar Alpha Vantage API para {event_name}: {e}")
 
     return records
 
