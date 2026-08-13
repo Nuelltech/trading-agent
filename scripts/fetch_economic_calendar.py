@@ -19,6 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 # FMP API descartada (utiliza Calendário Oficial de Datas FED/BLS/BCE/BoE/BoJ/SEC EDGAR + FRED/Alpha Vantage para actual_val)
 ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "")
+FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 
 COUNTRY_CURRENCY_MAP = {
     "US": ("EUA", "USD"),
@@ -80,11 +81,44 @@ OFFICIAL_REAL_SCHEDULE_2026 = [
 def enrich_macro_actuals_via_apis(records: list) -> list:
     """
     Enriquece automaticamente os registos do calendário que possuem actual_val = None
-    através da API Alpha Vantage (fonte pública e gratuita).
+    através da FRED API (com fallback na API Alpha Vantage).
     """
     if not records:
         return records
 
+    # FRED Series Mappings para indicadores Macro principais
+    fred_series_map = {
+        "US CPI (YoY)": ("CPIAUCSL", "pc1"),         # Percent change 1 year
+        "US Core CPI (MoM)": ("CPILFESL", "pch"),      # Percent change 1 month
+        "US PPI (MoM)": ("PPIFIS", "pch"),           # Percent change 1 month
+        "US Unemployment Rate": ("UNRATE", None),      # Percent direto
+        "US Non-Farm Payrolls (NFP)": ("PAYEMS", "chg"),# Absolute change (k)
+        "US Initial Jobless Claims": ("ICSA", None),    # Claims count
+        "Fed Interest Rate Decision": ("FEDFUNDS", None)
+    }
+
+    if FRED_API_KEY:
+        for rec in records:
+            if rec.get("actual_val") is not None:
+                continue
+            event_name = rec.get("event_name", "")
+            if event_name in fred_series_map:
+                series_id, units = fred_series_map[event_name]
+                try:
+                    units_param = f"&units={units}" if units else ""
+                    url = f"https://api.stlouisfed.org/fred/series/observations?series_id={series_id}&api_key={FRED_API_KEY}&file_type=json&sort_order=desc&limit=1{units_param}"
+                    res = requests.get(url, timeout=8)
+                    if res.status_code == 200:
+                        obs = res.json().get("observations", [])
+                        if obs and obs[0].get("value") != ".":
+                            val = float(obs[0]["value"])
+                            rec["actual_val"] = val
+                            rec["source_provider"] = "FRED_API"
+                            logging.info(f"⚡ [FRED AUTOMÁTICO] {event_name}: actual_val={val} capturado automaticamente da FRED API")
+                except Exception as e:
+                    logging.warning(f"⚠️ Erro ao consultar FRED API para {event_name}: {e}")
+
+    # Fallback via Alpha Vantage API
     av_function_map = {
         "US PPI (MoM)": "PPI",
         "US CPI (YoY)": "CPI",
@@ -109,7 +143,6 @@ def enrich_macro_actuals_via_apis(records: list) -> list:
                         if data and len(data) >= 2 and data[0].get("value") != ".":
                             v0 = float(data[0]["value"])
                             v1 = float(data[1]["value"])
-                            # Para índices como PPI/CPI/Retail Sales, calcular variação percentual mensal MoM se unit = '%'
                             if rec.get("unit") == "%" and func in ["PPI", "CPI", "RETAIL_SALES"] and v1 > 0:
                                 val = round(((v0 - v1) / v1) * 100.0, 2)
                             else:
