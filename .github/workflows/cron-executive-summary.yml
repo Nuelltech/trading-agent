@@ -4,7 +4,12 @@ on:
   schedule:
     # Executa diariamente às 22:45 UTC (após a conclusão da Camada 1)
     - cron: '45 22 * * *'
-  workflow_dispatch: # Execução manual sob demanda
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Data de referência YYYY-MM-DD (ex: 2026-08-12; deixar vazio para hoje)"
+        required: false
+        default: ""
 
 jobs:
   run-executive-summary:
@@ -51,7 +56,11 @@ jobs:
           SMTP_PASSWORD: ${{ secrets.SMTP_HOSTINGER_PASSWD || secrets.SMTP_PASSWORD }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: |
-          python scripts/run_executive_summary_agent.py --full
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            python scripts/run_executive_summary_agent.py --full --date="${{ github.event.inputs.date }}"
+          else
+            python scripts/run_executive_summary_agent.py --full
+          fi
 
       - name: Notificar Falha Crítica por Email
         if: failure()
