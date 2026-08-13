@@ -277,38 +277,13 @@ def task1c_future_calendar(target_date: str) -> List[Dict[str, Any]]:
         return []
 
 
-TICKER_ALIASES: Dict[str, List[str]] = {
-    "CL=F": ["CL=F", "WTI", "Petróleo", "Oil", "Crude"],
-    "BZ=F": ["BZ=F", "Brent", "Petróleo", "Oil"],
-    "DX-Y.NYB": ["DX-Y.NYB", "DXY", "Dólar", "USD", "Dollar"],
-    "GC=F": ["GC=F", "Ouro", "Gold"],
-    "^TNX": ["^TNX", "Yield", "Yields", "10Y", "Juros", "Treasury"],
-    "^TYX": ["^TYX", "Yield", "Yields", "30Y", "Juros"],
-    "^GSPC": ["^GSPC", "S&P", "SP500", "Ações", "Stock", "EUA"],
-    "^NDX": ["^NDX", "Nasdaq", "NDX", "Tech"],
-    "EURUSD=X": ["EURUSD=X", "EUR/USD", "Euro", "EUR"],
-    "^VIX": ["^VIX", "VIX", "Volatilidade"],
-    "^MOVE": ["^MOVE", "MOVE", "Volatilidade"],
-    "HG=F": ["HG=F", "Cobre", "Copper"],
-    "NG=F": ["NG=F", "Gás Natural", "Natural Gas"],
-    "CC=F": ["CC=F", "Cacau", "Cocoa"],
-    "NVDA": ["NVDA", "Nvidia"],
-    "AAPL": ["AAPL", "Apple"],
-    "TSLA": ["TSLA", "Tesla"],
-    "MSFT": ["MSFT", "Microsoft"],
-    "GOOGL": ["GOOGL", "Google", "Alphabet"],
-    "AMZN": ["AMZN", "Amazon"],
-    "META": ["META", "Meta", "Facebook"],
-}
-
-
 # -----------------------------------------------------------------------------
 # TAREFA 2 — CLASSIFICAR CADA CANDIDATO (CALENDÁRIO VS. NOTÍCIAS)
 # -----------------------------------------------------------------------------
 def task2_classify_candidates(candidates: List[Dict[str, Any]], target_date: str) -> List[Dict[str, Any]]:
     """
     Para cada candidato com variação > 2%, verifica se existe evento de calendário de hoje que o explique.
-    Usa um mapa de aliases (TICKER_ALIASES) para cruzar símbolos técnicos (ex: CL=F) com termos do Notion (ex: Petróleo, WTI).
+    O campo 'Ativo Relacionado' no Notion contém o símbolo entre parênteses (ex: Petróleo (CL=F)), permitindo o match direto por ticker.
     Se existir -> fonte = 'calendario'. Caso contrário -> fonte = 'noticias' (pesquisa no Feed de Notícias).
     """
     classified = []
@@ -316,21 +291,17 @@ def task2_classify_candidates(candidates: List[Dict[str, Any]], target_date: str
     for c in candidates:
         ticker = c["ticker"]
         c_item = dict(c)
-        aliases = TICKER_ALIASES.get(ticker, [ticker])
-        if ticker not in aliases:
-            aliases.append(ticker)
 
-        # 1. Verificar Calendário Económico hoje usando OR-filter de aliases (ex: CL=F, WTI, Petróleo)
+        # 1. Verificar Calendário Económico hoje (pesquisa direta do símbolo exato no Ativo Relacionado)
         found_in_calendar = False
         if NOTION_TOKEN and NOTION_CALENDAR_DB_ID:
             try:
                 url = f"https://api.notion.com/v1/databases/{NOTION_CALENDAR_DB_ID}/query"
-                or_calendar_filters = [{"property": "Ativo Relacionado", "rich_text": {"contains": alias}} for alias in aliases]
                 payload = {
                     "filter": {
                         "and": [
                             {"property": "Data", "date": {"equals": target_date}},
-                            {"or": or_calendar_filters}
+                            {"property": "Ativo Relacionado", "rich_text": {"contains": ticker}}
                         ]
                     }
                 }
@@ -347,17 +318,17 @@ def task2_classify_candidates(candidates: List[Dict[str, Any]], target_date: str
             except Exception as e:
                 logging.warning(f"⚠️ Erro ao verificar calendário para {ticker}: {e}")
 
-        # 2. Se não encontrou no calendário, procurar no Feed de Notícias com os aliases do ticker
+        # 2. Se não encontrou no calendário, procurar no Feed de Notícias
         if not found_in_calendar:
             c_item["fonte"] = "noticias"
             headlines = []
             if NOTION_TOKEN and NOTION_FEED_NOTICIAS_DB_ID:
                 try:
                     url = f"https://api.notion.com/v1/databases/{NOTION_FEED_NOTICIAS_DB_ID}/query"
-                    or_news_filters = [{"property": "Ticker(s) Relacionado(s)", "rich_text": {"contains": alias}} for alias in aliases]
                     payload = {
                         "filter": {
-                            "or": or_news_filters
+                            "property": "Ticker(s) Relacionado(s)",
+                            "rich_text": {"contains": ticker}
                         },
                         "page_size": 3
                     }

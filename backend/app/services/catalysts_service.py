@@ -234,7 +234,7 @@ Responde em JSON estrito, exatamente este formato, nada mais:
   "mapas_aplicaveis": "nome do Mapa usado (ex: 'CPI')",
   "mecanismo_aplicavel": "número + 1 frase do porquê, citando o Regime",
   "previsao_condicional": "Se Real > Projetado → [efeito]. Se Real < Projetado → [efeito]. Se em linha → [efeito].",
-  "ativo_relacionado": "lista dos ativos afetados, só os da nossa Configuração de Vigilância",
+  "ativo_relacionado": "lista dos ativos afetados, sempre no formato 'Nome (SÍMBOLO)' — ex: 'Petróleo (CL=F), Dólar Americano (DX-Y.NYB)'. Usar sempre o símbolo técnico exato (o mesmo usado na Configuração de Vigilância / indicators_catalog), nunca só o nome em português.",
   "impacto_nos_nossos_ativos": "1-2 frases, quais dos nossos 20 vigiados são relevantes e porquê"
 }"""
 
